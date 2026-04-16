@@ -52,16 +52,16 @@ public class ResourceRollbackService {
                 return;
             }
 
-            OrderOperationLog olog = new OrderOperationLog();
-            olog.setOrderNo(message.getOrderNo());
-            olog.setOperationType(OperationType.TIMEOUT_CANCEL.getValue());
-            olog.setOperationStatus(OperationStatus.PROCESSING.getValue());
-            olog.setRetryCount(0);
-            olog.setMaxRetryCount(3);
-            olog.setRequestData(objectMapper.writeValueAsString(message));
-            olog.setNextRetryTime(LocalDateTime.now());
+            OrderOperationLog blog = new OrderOperationLog();
+            blog.setOrderNo(message.getOrderNo());
+            blog.setOperationType(OperationType.TIMEOUT_CANCEL.getValue());
+            blog.setOperationStatus(OperationStatus.PROCESSING.getValue());
+            blog.setRetryCount(0);
+            blog.setMaxRetryCount(3);
+            blog.setRequestData(objectMapper.writeValueAsString(message));
+            blog.setNextRetryTime(LocalDateTime.now());
 
-            operationLogMapper.insert(olog);
+            operationLogMapper.insert(blog);
             log.info("创建回滚任务成功，订单号: {}", message.getOrderNo());
         } catch (Exception e) {
             log.error("创建回滚任务失败，订单号: {}", message.getOrderNo(), e);

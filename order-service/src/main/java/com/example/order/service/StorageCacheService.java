@@ -47,20 +47,13 @@ public class StorageCacheService {
         deductScript = new DefaultRedisScript<>(DEDUCT_LUA_SCRIPT, Long.class);
     }
 
-    /**
-     * Lua 脚本原子扣减库存
-     * @param productId 商品ID
-     * @param quantity 扣减数量
-     * @return 扣减后剩余库存，如果库存不足返回 -1
-     */
+
     private Long deductStockAtomic(Long productId, Integer quantity) {
         String key = STOCK_KEY_PREFIX + productId;
         return redisTemplate.execute(deductScript, Collections.singletonList(key), String.valueOf(quantity));
     }
 
-    /**
-     * Redis原子扣减库存(对外接口,返回是否成功）
-     */
+
     public boolean deductStockWithRedis(Long productId, Integer quantity) {
         log.info("开始扣减Redis库存，商品ID: {}, 扣减数量: {}", productId, quantity);
         Long remain = deductStockAtomic(productId, quantity);
@@ -74,7 +67,7 @@ public class StorageCacheService {
     }
 
     /**
-     * Redis 库存恢复(直接增加,一般不需要原子性判断)
+     * Redis库存恢复(直接增加,一般不需要原子性判断)
      */
     public void restoreStockWithRedis(Long productId, Integer quantity) {
         String key = STOCK_KEY_PREFIX + productId;
@@ -92,7 +85,7 @@ public class StorageCacheService {
     }
 
     /**
-     * 使用 Redisson 分布式锁进行库存扣减（备用方案）
+     * 使用 Redisson 分布式锁进行库存扣减(备用方案)
      */
     public boolean deductStockWithLock(Long productId, Integer quantity) {
         String lockKey = STOCK_LOCK_PREFIX + productId;
