@@ -20,13 +20,8 @@ public class AccountService {
 
     @Transactional(rollbackFor = Exception.class)
     public void deduct(AccountDeductRequest request) {
-        UpdateWrapper<Account> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("user_id", request.getUserId()).ge("balance", request.getAmount());
 
-        Account account = new Account();
-        account.setBalance(account.getBalance().subtract(request.getAmount()));
-
-        int updateCount = accountMapper.update(account, updateWrapper);
+        int updateCount = accountMapper.updateBalance(request.getUserId(), request.getAmount());
         if (updateCount == 0) {
             throw new BusinessException("余额不足或扣减失败");
         }

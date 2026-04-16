@@ -18,6 +18,7 @@ import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Service
@@ -81,10 +82,12 @@ public class OrderService {
         order.setQuantity(request.getQuantity());
         order.setAmount(request.getAmount());
         order.setStatus(OrderStatus.PENDING.getValue());
+        order.setCreatedTime(LocalDateTime.now());
+        order.setUpdatedTime(order.getCreatedTime());
         orderMapper.insert(order);
 
         // 5. 发送积分事务消息
-        sendPointsMessage(order);
+//        sendPointsMessage(order);
 
         // 6. 发送订单超时延迟消息(30分钟后)
         sendOrderTimeoutMessage(order);
@@ -106,6 +109,7 @@ public class OrderService {
     }
 
     private void sendOrderTimeoutMessage(Order order) {
+        log.info("开始发送订单超时延迟消息，订单号: {}", order.getOrderNo());
         OrderTimeoutMessage message = new OrderTimeoutMessage();
         message.setOrderNo(order.getOrderNo());
         message.setProductId(order.getProductId());

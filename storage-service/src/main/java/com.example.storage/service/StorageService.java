@@ -22,15 +22,8 @@ public class StorageService {
     public void deduct(StorageDeductRequest request) {
         log.info("库存服务开始扣减库存，商品ID: {}, 数量: {}", request.getProductId(), request.getQuantity());
 
-        UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("product_id", request.getProductId())
-                .ge("residue", request.getQuantity());
-
-        Storage updateStorage = new Storage();
-        updateStorage.setUsed(request.getQuantity());
-        updateStorage.setResidue(-request.getQuantity());
-
-        int updateCount = storageMapper.update(updateStorage, updateWrapper);
+        int updateCount = storageMapper.update(request.getProductId(), request.getQuantity());
+        log.info("updateCount: {}", updateCount);
         if (updateCount == 0) {
             throw new BusinessException("库存不足或扣减失败");
         }

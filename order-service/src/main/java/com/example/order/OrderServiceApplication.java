@@ -8,7 +8,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @MapperScan("com.example.order.mapper")
-@EnableScheduling
+//@EnableScheduling
+@EnableFeignClients(basePackages = "com.example.order.feign")
 public class OrderServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(OrderServiceApplication.class, args);
