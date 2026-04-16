@@ -58,7 +58,7 @@ public class StorageCacheService {
     }
 
     /**
-     * Redis 原子扣减库存（对外接口，返回是否成功）
+     * Redis原子扣减库存(对外接口,返回是否成功）
      */
     public boolean deductStockWithRedis(Long productId, Integer quantity) {
         Long remain = deductStockAtomic(productId, quantity);

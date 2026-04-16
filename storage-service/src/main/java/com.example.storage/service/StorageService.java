@@ -21,8 +21,7 @@ public class StorageService {
     @Transactional(rollbackFor = Exception.class)
     public void deduct(StorageDeductRequest request) {
         UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("product_id", request.getProductId())
-                .ge("residue", request.getQuantity());
+        updateWrapper.eq("product_id", request.getProductId()).ge("residue", request.getQuantity());
 
         Storage storage = new Storage();
         storage.setUsed(storage.getUsed() + request.getQuantity());
@@ -38,8 +37,7 @@ public class StorageService {
     @Transactional(rollbackFor = Exception.class)
     public void restore(StorageRestoreRequest request) {
         UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("product_id", request.getProductId())
-                .ge("used", request.getQuantity());
+        updateWrapper.eq("product_id", request.getProductId()).ge("used", request.getQuantity());
 
         Storage storage = new Storage();
         storage.setUsed(storage.getUsed() - request.getQuantity());

@@ -17,7 +17,7 @@ public class PointsController {
     private PointsService pointsService;
 
     @PostMapping("/add")
-    public Result addPoints(@RequestBody PointsMessage message) {
+    public Result<?> addPoints(@RequestBody PointsMessage message) {
         pointsService.addPoints(message);
         return Result.success();
     }

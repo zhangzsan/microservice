@@ -19,13 +19,13 @@ public class AccountController {
     private AccountService accountService;
 
     @PostMapping("/deduct")
-    public Result deduct(@RequestBody AccountDeductRequest request) {
+    public Result<?> deduct(@RequestBody AccountDeductRequest request) {
         accountService.deduct(request);
         return Result.success();
     }
 
     @PostMapping("/restore")
-    public Result restore(@RequestBody AccountRestoreRequest request) {
+    public Result<?> restore(@RequestBody AccountRestoreRequest request) {
         accountService.restore(request);
         return Result.success();
     }

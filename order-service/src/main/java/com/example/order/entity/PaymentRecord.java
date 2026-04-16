@@ -1,23 +1,23 @@
 package com.example.order.entity;
 
+NEW_FILE_CODE
+package com.example.order.entity;
+
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("t_order")
-public class Order {
+@TableName("t_payment_record")
+public class PaymentRecord {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String orderNo;
-    private Long userId;
-    private Long productId;
-    private Integer quantity;
-    private BigDecimal amount;
-    private Integer status;
-    @Version
-    private Integer version;
+    private String transactionId;
+    private BigDecimal payAmount;
+    private Integer payStatus;
+    private Integer payChannel;
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdTime;
     @TableField(fill = FieldFill.INSERT_UPDATE)

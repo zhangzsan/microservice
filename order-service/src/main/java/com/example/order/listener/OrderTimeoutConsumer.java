@@ -1,21 +1,17 @@
-// OrderTimeoutConsumer.java
 package com.example.order.listener;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.common.constant.OrderStatus;
 import com.example.common.dto.OrderTimeoutMessage;
-import com.example.common.dto.StorageRestoreRequest;
-import com.example.common.dto.AccountRestoreRequest;
 import com.example.order.entity.Order;
-import com.example.order.feign.AccountFeignClient;
-import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderMapper;
-import com.example.order.service.StorageCacheService;
+import com.example.order.service.ResourceRollbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @RocketMQMessageListener(topic = "order-timeout-topic", consumerGroup = "order-timeout-consumer-group")
@@ -24,36 +20,28 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
 
     @Autowired
     private OrderMapper orderMapper;
+
     @Autowired
-    private StorageFeignClient storageFeignClient;
-    @Autowired
-    private AccountFeignClient accountFeignClient;
-    @Autowired
-    private StorageCacheService storageCacheService;
+    private ResourceRollbackService rollbackService;
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void onMessage(OrderTimeoutMessage message) {
         log.info("接收到订单超时消息，订单号: {}", message.getOrderNo());
-        Order order = orderMapper.selectOne(
-                new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, message.getOrderNo()));
-        if (order != null && order.getStatus() == OrderStatus.PENDING.getValue()) {
-            order.setStatus(OrderStatus.TIMEOUT.getValue());
-            orderMapper.updateById(order);
 
-            StorageRestoreRequest storageRequest = new StorageRestoreRequest();
-            storageRequest.setProductId(message.getProductId());
-            storageRequest.setQuantity(message.getQuantity());
-            storageRequest.setOrderNo(message.getOrderNo());
-            storageFeignClient.restore(storageRequest);
+        LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
+                .eq(Order::getOrderNo, message.getOrderNo())
+                .eq(Order::getStatus, OrderStatus.PENDING.getValue())
+                .set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
 
-            AccountRestoreRequest accountRequest = new AccountRestoreRequest();
-            accountRequest.setUserId(message.getUserId());
-            accountRequest.setAmount(message.getAmount());
-            accountRequest.setOrderNo(message.getOrderNo());
-            accountFeignClient.restore(accountRequest);
+        int updated = orderMapper.update(null, updateWrapper);
 
-            storageCacheService.restoreStockWithRedis(message.getProductId(), message.getQuantity());
-            log.info("订单超时取消成功，订单号: {}", message.getOrderNo());
+        if (updated > 0) {
+            log.info("订单状态更新为超时成功，创建回滚任务，订单号: {}", message.getOrderNo());
+            rollbackService.createRollbackTask(message);
+            log.info("订单超时处理完成，回滚任务已创建，订单号: {}", message.getOrderNo());
+        } else {
+            log.warn("订单状态已变更或不存在，无需处理，订单号: {}", message.getOrderNo());
         }
     }
 }

@@ -44,6 +44,7 @@ rocketmq:
   producer:
     group: order-producer-group
     send-message-timeout: 3000
+    retry-times: 3
 
 redis:
   host: localhost

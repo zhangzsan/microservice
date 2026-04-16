@@ -1,0 +1,336 @@
+Index: order-service/src/main/java/com/example/order/feign/fallback/PointsFeignFallback.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.order.feign.fallback;\r\n\r\nimport com.example.common.dto.PointsMessage;\r\nimport com.example.common.result.Result;\r\nimport com.example.order.feign.PointsFeignClient;\r\nimport org.springframework.stereotype.Component;\r\n\r\n@Component\r\npublic class PointsFeignFallback implements PointsFeignClient {\r\n\r\n    @Override\r\n    public Result addPoints(PointsMessage pointsMessage) {\r\n        // 降级处理：记录日志，不阻塞主流程\r\n        return Result.error(\"积分服务异常，积分增加失败\");\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/order-service/src/main/java/com/example/order/feign/fallback/PointsFeignFallback.java b/order-service/src/main/java/com/example/order/feign/fallback/PointsFeignFallback.java
+--- a/order-service/src/main/java/com/example/order/feign/fallback/PointsFeignFallback.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/order-service/src/main/java/com/example/order/feign/fallback/PointsFeignFallback.java	(date 1776220423087)
+@@ -9,7 +9,7 @@
+ public class PointsFeignFallback implements PointsFeignClient {
+ 
+     @Override
+-    public Result addPoints(PointsMessage pointsMessage) {
++    public Result<?> addPoints(PointsMessage pointsMessage) {
+         // 降级处理：记录日志，不阻塞主流程
+         return Result.error("积分服务异常，积分增加失败");
+     }
+Index: order-service/src/main/java/com/example/order/service/OrderService.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.order.service;\r\n\r\nimport com.example.common.constant.OrderStatus;\r\nimport com.example.common.dto.*;\r\nimport com.example.common.exception.BusinessException;\r\nimport com.example.common.result.Result;\r\nimport com.example.order.dto.OrderDTO;\r\nimport com.example.order.entity.Order;\r\nimport com.example.order.feign.AccountFeignClient;\r\nimport com.example.order.feign.StorageFeignClient;\r\nimport com.example.order.mapper.OrderMapper;\r\nimport io.seata.spring.annotation.GlobalTransactional;\r\nimport lombok.extern.slf4j.Slf4j;\r\nimport org.apache.rocketmq.spring.core.RocketMQTemplate;\r\nimport org.springframework.beans.factory.annotation.Autowired;\r\nimport org.springframework.messaging.Message;\r\nimport org.springframework.messaging.support.MessageBuilder;\r\nimport org.springframework.stereotype.Service;\r\nimport org.springframework.transaction.annotation.Transactional;\r\n\r\nimport java.util.UUID;\r\n\r\n@Service\r\n@Slf4j\r\npublic class OrderService {\r\n\r\n    @Autowired\r\n    private OrderMapper orderMapper;\r\n\r\n    @Autowired\r\n    private StorageFeignClient storageFeignClient;\r\n\r\n    @Autowired\r\n    private AccountFeignClient accountFeignClient;\r\n\r\n    @Autowired\r\n    private StorageCacheService storageCacheService;\r\n\r\n    @Autowired\r\n    private RocketMQTemplate rocketMQTemplate;\r\n\r\n    @GlobalTransactional(name = \"create-order\", rollbackFor = Exception.class)\r\n    @Transactional(rollbackFor = Exception.class)\r\n    public OrderDTO createOrder(OrderCreateRequest request) {\r\n        log.info(\"开始创建订单，用户ID: {}, 商品ID: {}, 数量: {}\", request.getUserId(), request.getProductId(), request.getQuantity());\r\n\r\n        // 1. Redis预扣库存\r\n        boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(\r\n                request.getProductId(), request.getQuantity());\r\n        if (!cacheDeductSuccess) {\r\n            throw new BusinessException(\"库存不足,请选择其他商品下单\");\r\n        }\r\n\r\n        String orderNo = generateOrderNo();\r\n\r\n        // 2. 调用库存服务扣减库存\r\n        StorageDeductRequest storageRequest = new StorageDeductRequest();\r\n        storageRequest.setProductId(request.getProductId());\r\n        storageRequest.setQuantity(request.getQuantity());\r\n        storageRequest.setOrderNo(orderNo);\r\n        Result<?> storageResult = storageFeignClient.deduct(storageRequest);\r\n        if (!storageResult.isSuccess()) {\r\n            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity());\r\n            throw new BusinessException(storageResult.getMessage());\r\n        }\r\n\r\n        // 3. 调用账户服务扣减余额\r\n        AccountDeductRequest accountRequest = new AccountDeductRequest();\r\n        accountRequest.setUserId(request.getUserId());\r\n        accountRequest.setAmount(request.getAmount());\r\n        accountRequest.setOrderNo(orderNo);\r\n        Result<?> accountResult = accountFeignClient.deduct(accountRequest);\r\n        if (!accountResult.isSuccess()) {\r\n            throw new BusinessException(accountResult.getMessage());\r\n        }\r\n\r\n        // 4. 保存订单\r\n        Order order = new Order();\r\n        order.setOrderNo(orderNo);\r\n        order.setUserId(request.getUserId());\r\n        order.setProductId(request.getProductId());\r\n        order.setQuantity(request.getQuantity());\r\n        order.setAmount(request.getAmount());\r\n        order.setStatus(OrderStatus.PENDING.getValue());\r\n        orderMapper.insert(order);\r\n\r\n        // 5. 发送积分事务消息\r\n        sendPointsMessage(order);\r\n\r\n        // 6. 发送订单超时延迟消息(30分钟后)\r\n        sendOrderTimeoutMessage(order);\r\n\r\n        log.info(\"订单创建成功，订单号: {}\", orderNo);\r\n        return convertToDTO(order);\r\n    }\r\n\r\n    private void sendPointsMessage(Order order) {\r\n        PointsMessage pointsMessage = new PointsMessage();\r\n        pointsMessage.setUserId(order.getUserId());\r\n        pointsMessage.setOrderNo(order.getOrderNo());\r\n        pointsMessage.setPoints(order.getAmount().intValue());\r\n\r\n        Message<PointsMessage> message = MessageBuilder.withPayload(pointsMessage)\r\n                .setHeader(\"order_no\", order.getOrderNo())\r\n                .build();\r\n        rocketMQTemplate.sendMessageInTransaction(\"points-topic\", message, order.getOrderNo());\r\n        log.info(\"发送积分事务消息，订单号: {}\", order.getOrderNo());\r\n    }\r\n\r\n    private void sendOrderTimeoutMessage(Order order) {\r\n        OrderTimeoutMessage message = new OrderTimeoutMessage();\r\n        message.setOrderNo(order.getOrderNo());\r\n        message.setProductId(order.getProductId());\r\n        message.setQuantity(order.getQuantity());\r\n        message.setUserId(order.getUserId());\r\n        message.setAmount(order.getAmount());\r\n\r\n        rocketMQTemplate.syncSend(\"order-timeout-topic\",\r\n                MessageBuilder.withPayload(message).build(),\r\n                3000, 16); // 延迟级别16对应30分钟\r\n        log.info(\"发送订单超时延迟消息，订单号: {}\", order.getOrderNo());\r\n    }\r\n\r\n    /**\r\n     * 生成订单号\r\n     */\r\n    private String generateOrderNo() {\r\n        return \"ORD\" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 8);\r\n    }\r\n\r\n    private OrderDTO convertToDTO(Order order) {\r\n        OrderDTO dto = new OrderDTO();\r\n        dto.setOrderNo(order.getOrderNo());\r\n        dto.setUserId(order.getUserId());\r\n        dto.setProductId(order.getProductId());\r\n        dto.setQuantity(order.getQuantity());\r\n        dto.setAmount(order.getAmount());\r\n        dto.setStatus(order.getStatus());\r\n        return dto;\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/order-service/src/main/java/com/example/order/service/OrderService.java b/order-service/src/main/java/com/example/order/service/OrderService.java
+--- a/order-service/src/main/java/com/example/order/service/OrderService.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/order-service/src/main/java/com/example/order/service/OrderService.java	(date 1776219718111)
+@@ -16,7 +16,6 @@
+ import org.springframework.messaging.Message;
+ import org.springframework.messaging.support.MessageBuilder;
+ import org.springframework.stereotype.Service;
+-import org.springframework.transaction.annotation.Transactional;
+ 
+ import java.util.UUID;
+ 
+@@ -40,10 +39,8 @@
+     private RocketMQTemplate rocketMQTemplate;
+ 
+     @GlobalTransactional(name = "create-order", rollbackFor = Exception.class)
+-    @Transactional(rollbackFor = Exception.class)
+     public OrderDTO createOrder(OrderCreateRequest request) {
+         log.info("开始创建订单，用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
+-
+         // 1. Redis预扣库存
+         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(
+                 request.getProductId(), request.getQuantity());
+Index: order-service/src/main/java/com/example/order/feign/fallback/AccountFeignFallback.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.order.feign.fallback;\r\n\r\nimport com.example.common.dto.AccountDeductRequest;\r\nimport com.example.common.dto.AccountRestoreRequest;\r\nimport com.example.common.result.Result;\r\nimport com.example.order.feign.AccountFeignClient;\r\nimport org.springframework.stereotype.Component;\r\n\r\n@Component\r\npublic class AccountFeignFallback implements AccountFeignClient {\r\n    @Override\r\n    public Result deduct(AccountDeductRequest request) {\r\n        return Result.error(\"账户服务异常，请稍后重试\");\r\n    }\r\n\r\n    @Override\r\n    public Result restore(AccountRestoreRequest request) {\r\n        return Result.error(\"账户服务异常\");\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/order-service/src/main/java/com/example/order/feign/fallback/AccountFeignFallback.java b/order-service/src/main/java/com/example/order/feign/fallback/AccountFeignFallback.java
+--- a/order-service/src/main/java/com/example/order/feign/fallback/AccountFeignFallback.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/order-service/src/main/java/com/example/order/feign/fallback/AccountFeignFallback.java	(date 1776220103365)
+@@ -9,12 +9,12 @@
+ @Component
+ public class AccountFeignFallback implements AccountFeignClient {
+     @Override
+-    public Result deduct(AccountDeductRequest request) {
++    public Result<?> deduct(AccountDeductRequest request) {
+         return Result.error("账户服务异常，请稍后重试");
+     }
+ 
+     @Override
+-    public Result restore(AccountRestoreRequest request) {
+-        return Result.error("账户服务异常");
++    public void restore(AccountRestoreRequest request) {
++        Result.error("账户服务异常");
+     }
+ }
+\ No newline at end of file
+Index: order-service/src/main/java/com/example/order/service/StorageCacheService.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.order.service;\r\n\r\nimport lombok.extern.slf4j.Slf4j;\r\nimport org.redisson.api.RLock;\r\nimport org.redisson.api.RedissonClient;\r\nimport org.springframework.beans.factory.annotation.Autowired;\r\nimport org.springframework.data.redis.core.StringRedisTemplate;\r\nimport org.springframework.data.redis.core.script.DefaultRedisScript;\r\nimport org.springframework.data.redis.core.script.RedisScript;\r\nimport org.springframework.stereotype.Service;\r\n\r\nimport javax.annotation.PostConstruct;\r\nimport java.util.Collections;\r\nimport java.util.concurrent.TimeUnit;\r\n\r\n@Service\r\n@Slf4j\r\npublic class StorageCacheService {\r\n\r\n    @Autowired\r\n    private StringRedisTemplate redisTemplate;\r\n\r\n    @Autowired\r\n    private RedissonClient redissonClient;\r\n\r\n    private static final String STOCK_KEY_PREFIX = \"stock:product:\";\r\n    private static final String STOCK_LOCK_PREFIX = \"lock:stock:product:\";\r\n\r\n    // Lua 脚本：检查库存并扣减，返回剩余库存；若库存不足返回 -1\r\n    private static final String DEDUCT_LUA_SCRIPT =\r\n            \"local key = KEYS[1]\\n\" +\r\n            \"local quantity = tonumber(ARGV[1])\\n\" +\r\n            \"local current = tonumber(redis.call('get', key) or '0')\\n\" +\r\n            \"if current >= quantity then\\n\" +\r\n            \"    local newStock = current - quantity\\n\" +\r\n            \"    redis.call('set', key, tostring(newStock))\\n\" +\r\n            \"    return newStock\\n\" +\r\n            \"else\\n\" +\r\n            \"    return -1\\n\" +\r\n            \"end\";\r\n\r\n    private RedisScript<Long> deductScript;\r\n\r\n    @PostConstruct\r\n    public void init() {\r\n        deductScript = new DefaultRedisScript<>(DEDUCT_LUA_SCRIPT, Long.class);\r\n    }\r\n\r\n    /**\r\n     * Lua 脚本原子扣减库存\r\n     * @param productId 商品ID\r\n     * @param quantity 扣减数量\r\n     * @return 扣减后剩余库存，如果库存不足返回 -1\r\n     */\r\n    private Long deductStockAtomic(Long productId, Integer quantity) {\r\n        String key = STOCK_KEY_PREFIX + productId;\r\n        return redisTemplate.execute(deductScript, Collections.singletonList(key), String.valueOf(quantity));\r\n    }\r\n\r\n    /**\r\n     * Redis 原子扣减库存（对外接口，返回是否成功）\r\n     */\r\n    public boolean deductStockWithRedis(Long productId, Integer quantity) {\r\n        Long remain = deductStockAtomic(productId, quantity);\r\n        if (remain >= 0) {\r\n            log.info(\"Redis库存预扣成功，商品ID: {}, 剩余库存: {}\", productId, remain);\r\n            return true;\r\n        } else {\r\n            log.warn(\"Redis库存不足，商品ID: {}, 请求数量: {}\", productId, quantity);\r\n            return false;\r\n        }\r\n    }\r\n\r\n    /**\r\n     * Redis 库存恢复(直接增加,一般不需要原子性判断)\r\n     */\r\n    public void restoreStockWithRedis(Long productId, Integer quantity) {\r\n        String key = STOCK_KEY_PREFIX + productId;\r\n        Long newStock = redisTemplate.opsForValue().increment(key, quantity);\r\n        log.info(\"Redis库存恢复成功，商品ID: {}, 恢复后库存: {}\", productId, newStock);\r\n    }\r\n\r\n    /**\r\n     * 初始化商品库存到 Redis\r\n     */\r\n    public void initStockToRedis(Long productId, Integer stock) {\r\n        String key = STOCK_KEY_PREFIX + productId;\r\n        redisTemplate.opsForValue().set(key, String.valueOf(stock));\r\n        log.info(\"初始化Redis库存，商品ID: {}, 库存: {}\", productId, stock);\r\n    }\r\n\r\n    /**\r\n     * 使用 Redisson 分布式锁进行库存扣减（备用方案）\r\n     */\r\n    public boolean deductStockWithLock(Long productId, Integer quantity) {\r\n        String lockKey = STOCK_LOCK_PREFIX + productId;\r\n        RLock lock = redissonClient.getLock(lockKey);\r\n        try {\r\n            if (lock.tryLock(3, 10, TimeUnit.SECONDS)) {\r\n                String key = STOCK_KEY_PREFIX + productId;\r\n                String stockStr = redisTemplate.opsForValue().get(key);\r\n                if (stockStr == null) return false;\r\n                int stock = Integer.parseInt(stockStr);\r\n                if (stock >= quantity) {\r\n                    redisTemplate.opsForValue().set(key, String.valueOf(stock - quantity));\r\n                    log.info(\"分布式锁扣减库存成功，商品ID: {}, 剩余: {}\", productId, stock - quantity);\r\n                    return true;\r\n                } else {\r\n                    log.warn(\"库存不足，商品ID: {}, 当前库存: {}, 请求数量: {}\", productId, stock, quantity);\r\n                    return false;\r\n                }\r\n            } else {\r\n                log.warn(\"获取分布式锁失败，商品ID: {}\", productId);\r\n                return false;\r\n            }\r\n        } catch (InterruptedException e) {\r\n            Thread.currentThread().interrupt();\r\n            log.error(\"分布式锁等待被中断，商品ID: {}\", productId, e);\r\n            return false;\r\n        } finally {\r\n            if (lock.isHeldByCurrentThread()) {\r\n                lock.unlock();\r\n            }\r\n        }\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/order-service/src/main/java/com/example/order/service/StorageCacheService.java b/order-service/src/main/java/com/example/order/service/StorageCacheService.java
+--- a/order-service/src/main/java/com/example/order/service/StorageCacheService.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/order-service/src/main/java/com/example/order/service/StorageCacheService.java	(date 1776219293673)
+@@ -24,19 +24,20 @@
+     private RedissonClient redissonClient;
+ 
+     private static final String STOCK_KEY_PREFIX = "stock:product:";
++
+     private static final String STOCK_LOCK_PREFIX = "lock:stock:product:";
+ 
+-    // Lua 脚本：检查库存并扣减，返回剩余库存；若库存不足返回 -1
++    // Lua脚本:检查库存并扣减,返回剩余库存; 若库存不足返回 -1
+     private static final String DEDUCT_LUA_SCRIPT =
+-            "local key = KEYS[1]\n" +
+-            "local quantity = tonumber(ARGV[1])\n" +
+-            "local current = tonumber(redis.call('get', key) or '0')\n" +
+-            "if current >= quantity then\n" +
+-            "    local newStock = current - quantity\n" +
+-            "    redis.call('set', key, tostring(newStock))\n" +
+-            "    return newStock\n" +
+-            "else\n" +
+-            "    return -1\n" +
++            "local key = KEYS[1] " +
++            "local quantity = tonumber(ARGV[1]) " +
++            "local current = tonumber(redis.call('get', key) or '0') " +
++            "if current >= quantity then " +
++            "    local newStock = current - quantity " +
++            "    redis.call('set', key, tostring(newStock)) " +
++            "    return newStock" +
++            " else " +
++            "    return -1 " +
+             "end";
+ 
+     private RedisScript<Long> deductScript;
+@@ -46,20 +47,11 @@
+         deductScript = new DefaultRedisScript<>(DEDUCT_LUA_SCRIPT, Long.class);
+     }
+ 
+-    /**
+-     * Lua 脚本原子扣减库存
+-     * @param productId 商品ID
+-     * @param quantity 扣减数量
+-     * @return 扣减后剩余库存，如果库存不足返回 -1
+-     */
+     private Long deductStockAtomic(Long productId, Integer quantity) {
+         String key = STOCK_KEY_PREFIX + productId;
+         return redisTemplate.execute(deductScript, Collections.singletonList(key), String.valueOf(quantity));
+     }
+ 
+-    /**
+-     * Redis 原子扣减库存（对外接口，返回是否成功）
+-     */
+     public boolean deductStockWithRedis(Long productId, Integer quantity) {
+         Long remain = deductStockAtomic(productId, quantity);
+         if (remain >= 0) {
+@@ -70,14 +62,11 @@
+             return false;
+         }
+     }
+-
+-    /**
+-     * Redis 库存恢复(直接增加,一般不需要原子性判断)
+-     */
++    
+     public void restoreStockWithRedis(Long productId, Integer quantity) {
+         String key = STOCK_KEY_PREFIX + productId;
+         Long newStock = redisTemplate.opsForValue().increment(key, quantity);
+-        log.info("Redis库存恢复成功，商品ID: {}, 恢复后库存: {}", productId, newStock);
++        log.info("Redis库存恢复成功,商品ID:{}, 恢复后库存: {}", productId, newStock);
+     }
+ 
+     /**
+@@ -90,7 +79,7 @@
+     }
+ 
+     /**
+-     * 使用 Redisson 分布式锁进行库存扣减（备用方案）
++     * 使用Redisson布式锁进行库存扣减(备用方案) 重量级不考虑
+      */
+     public boolean deductStockWithLock(Long productId, Integer quantity) {
+         String lockKey = STOCK_LOCK_PREFIX + productId;
+Index: order-service/src/main/java/com/example/order/feign/AccountFeignClient.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.order.feign;\r\n\r\nimport com.example.common.dto.AccountDeductRequest;\r\nimport com.example.common.dto.AccountRestoreRequest;\r\nimport com.example.common.result.Result;\r\nimport com.example.order.feign.fallback.AccountFeignFallback;\r\nimport org.springframework.cloud.openfeign.FeignClient;\r\nimport org.springframework.web.bind.annotation.PostMapping;\r\nimport org.springframework.web.bind.annotation.RequestBody;\r\n\r\n@FeignClient(name = \"account-service\", fallback = AccountFeignFallback.class)\r\npublic interface AccountFeignClient {\r\n    @PostMapping(\"/account/deduct\")\r\n    Result<?> deduct(@RequestBody AccountDeductRequest request);\r\n\r\n    @PostMapping(\"/account/restore\")\r\n    Result<?> restore(@RequestBody AccountRestoreRequest request);\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/order-service/src/main/java/com/example/order/feign/AccountFeignClient.java b/order-service/src/main/java/com/example/order/feign/AccountFeignClient.java
+--- a/order-service/src/main/java/com/example/order/feign/AccountFeignClient.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/order-service/src/main/java/com/example/order/feign/AccountFeignClient.java	(date 1776220086224)
+@@ -14,5 +14,5 @@
+     Result<?> deduct(@RequestBody AccountDeductRequest request);
+ 
+     @PostMapping("/account/restore")
+-    Result<?> restore(@RequestBody AccountRestoreRequest request);
++    void restore(@RequestBody AccountRestoreRequest request);
+ }
+\ No newline at end of file
+Index: common/src/main/java/com/example/common/exception/GlobalExceptionHandler.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.common.exception;\r\n\r\nimport com.example.common.result.Result;\r\nimport lombok.extern.slf4j.Slf4j;\r\nimport org.springframework.web.bind.annotation.ExceptionHandler;\r\nimport org.springframework.web.bind.annotation.RestControllerAdvice;\r\n\r\n@RestControllerAdvice\r\npublic class GlobalExceptionHandler {\r\n\r\n    @ExceptionHandler(BusinessException.class)\r\n    public Result<String> handleBusinessException(BusinessException e) {\r\n        System.out.println(\"业务异常：{}\" +  e.getMessage());\r\n        return Result.error(e.getCode(), e.getMessage());\r\n    }\r\n\r\n    @ExceptionHandler(Exception.class)\r\n    public Result<String> handleException(Exception e) {\r\n        System.out.println(\"系统异常：{}\" +  e.getMessage());\r\n        return Result.error(\"系统繁忙，请稍后再试\");\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/common/src/main/java/com/example/common/exception/GlobalExceptionHandler.java b/common/src/main/java/com/example/common/exception/GlobalExceptionHandler.java
+--- a/common/src/main/java/com/example/common/exception/GlobalExceptionHandler.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/common/src/main/java/com/example/common/exception/GlobalExceptionHandler.java	(date 1776179796846)
+@@ -5,6 +5,7 @@
+ import org.springframework.web.bind.annotation.ExceptionHandler;
+ import org.springframework.web.bind.annotation.RestControllerAdvice;
+ 
++@Slf4j
+ @RestControllerAdvice
+ public class GlobalExceptionHandler {
+ 
+Index: points-service/src/main/java/com/example/points/controller/PointsController.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.points.controller;\r\n\r\nimport com.example.common.dto.PointsMessage;\r\nimport com.example.common.result.Result;\r\nimport com.example.points.service.PointsService;\r\nimport org.springframework.beans.factory.annotation.Autowired;\r\nimport org.springframework.web.bind.annotation.PostMapping;\r\nimport org.springframework.web.bind.annotation.RequestBody;\r\nimport org.springframework.web.bind.annotation.RequestMapping;\r\nimport org.springframework.web.bind.annotation.RestController;\r\n\r\n@RestController\r\n@RequestMapping(\"/points\")\r\npublic class PointsController {\r\n\r\n    @Autowired\r\n    private PointsService pointsService;\r\n\r\n    @PostMapping(\"/add\")\r\n    public Result addPoints(@RequestBody PointsMessage message) {\r\n        pointsService.addPoints(message);\r\n        return Result.success();\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/points-service/src/main/java/com/example/points/controller/PointsController.java b/points-service/src/main/java/com/example/points/controller/PointsController.java
+--- a/points-service/src/main/java/com/example/points/controller/PointsController.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/points-service/src/main/java/com/example/points/controller/PointsController.java	(date 1776177728909)
+@@ -17,8 +17,15 @@
+     private PointsService pointsService;
+ 
+     @PostMapping("/add")
+-    public Result addPoints(@RequestBody PointsMessage message) {
++    public Result<?> addPoints(@RequestBody PointsMessage message) {
+         pointsService.addPoints(message);
+         return Result.success();
+     }
++
++    // PointsController.java 新增接口
++    @PostMapping("/deduct")
++    public Result<?> deductPoints(@RequestBody PointsMessage message) {
++        pointsService.deductPoints(message);
++        return Result.success();
++    }
+ }
+\ No newline at end of file
+Index: common/src/main/java/com/example/common/dto/StorageConfirmRequest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/common/src/main/java/com/example/common/dto/StorageConfirmRequest.java b/common/src/main/java/com/example/common/dto/StorageConfirmRequest.java
+new file mode 100644
+--- /dev/null	(date 1776178756825)
++++ b/common/src/main/java/com/example/common/dto/StorageConfirmRequest.java	(date 1776178756825)
+@@ -0,0 +1,10 @@
++package com.example.common.dto;
++
++import lombok.Data;
++
++@Data
++public class StorageConfirmRequest {
++    private Long productId;
++    private Integer quantity;
++    private String orderNo;
++}
+\ No newline at end of file
+Index: points-service/src/main/java/com/example/points/service/PointsService.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package com.example.points.service;\r\n\r\nimport com.example.common.dto.PointsMessage;\r\nimport com.example.points.entity.PointsRecord;\r\nimport com.example.points.mapper.PointsRecordMapper;\r\nimport lombok.extern.slf4j.Slf4j;\r\nimport org.springframework.beans.factory.annotation.Autowired;\r\nimport org.springframework.stereotype.Service;\r\n\r\n@Service\r\n@Slf4j\r\npublic class PointsService {\r\n\r\n    @Autowired\r\n    private PointsRecordMapper pointsRecordMapper;\r\n\r\n    public void addPoints(PointsMessage message) {\r\n        PointsRecord record = new PointsRecord();\r\n        record.setUserId(message.getUserId());\r\n        record.setOrderNo(message.getOrderNo());\r\n        record.setPoints(message.getPoints());\r\n        pointsRecordMapper.insert(record);\r\n        log.info(\"增加积分成功，用户ID: {}, 积分: {}\", message.getUserId(), message.getPoints());\r\n    }\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/points-service/src/main/java/com/example/points/service/PointsService.java b/points-service/src/main/java/com/example/points/service/PointsService.java
+--- a/points-service/src/main/java/com/example/points/service/PointsService.java	(revision 8ea694657d83348ef1d3c64069680afbd4149e8a)
++++ b/points-service/src/main/java/com/example/points/service/PointsService.java	(date 1776177807641)
+@@ -1,5 +1,6 @@
+ package com.example.points.service;
+ 
++import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+ import com.example.common.dto.PointsMessage;
+ import com.example.points.entity.PointsRecord;
+ import com.example.points.mapper.PointsRecordMapper;
+@@ -22,4 +23,27 @@
+         pointsRecordMapper.insert(record);
+         log.info("增加积分成功，用户ID: {}, 积分: {}", message.getUserId(), message.getPoints());
+     }
++
++    public void deductPoints(PointsMessage message) {
++        // 根据订单号查询积分记录,若存在则扣除(或增加负分记录）
++        PointsRecord record = pointsRecordMapper.selectOne(
++                new LambdaQueryWrapper<PointsRecord>().eq(PointsRecord::getOrderNo, message.getOrderNo())
++        );
++        if (record != null && record.getPoints() > 0) {
++            // 实际业务中可能新增一条负分记录，或直接扣减用户总积分
++            // 这里简单记录一条负分流水
++            PointsRecord deductRecord = new PointsRecord();
++            deductRecord.setUserId(message.getUserId());
++            deductRecord.setOrderNo(message.getOrderNo());
++            deductRecord.setPoints(-message.getPoints()); // 负数表示扣除
++            pointsRecordMapper.insert(deductRecord);
++
++            // 同时更新用户总积分（假设有 user_points 表）
++//            userPointsService.decreasePoints(message.getUserId(), message.getPoints());
++
++            log.info("积分扣除成功，订单号: {}, 扣除积分: {}", message.getOrderNo(), message.getPoints());
++        } else {
++            log.warn("积分记录不存在或已扣除，订单号: {}", message.getOrderNo());
++        }
++    }
+ }
+\ No newline at end of file
+Index: common/src/main/java/com/example/common/dto/StorageReleaseRequest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/common/src/main/java/com/example/common/dto/StorageReleaseRequest.java b/common/src/main/java/com/example/common/dto/StorageReleaseRequest.java
+new file mode 100644
+--- /dev/null	(date 1776178771965)
++++ b/common/src/main/java/com/example/common/dto/StorageReleaseRequest.java	(date 1776178771965)
+@@ -0,0 +1,10 @@
++package com.example.common.dto;
++
++import lombok.Data;
++
++@Data
++public class StorageReleaseRequest {
++    private Long productId;
++    private Integer quantity;
++    private String orderNo;
++}
+\ No newline at end of file
+Index: common/src/main/java/com/example/common/dto/StorageLockRequest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/common/src/main/java/com/example/common/dto/StorageLockRequest.java b/common/src/main/java/com/example/common/dto/StorageLockRequest.java
+new file mode 100644
+--- /dev/null	(date 1776178742747)
++++ b/common/src/main/java/com/example/common/dto/StorageLockRequest.java	(date 1776178742747)
+@@ -0,0 +1,10 @@
++package com.example.common.dto;
++
++import lombok.Data;
++
++@Data
++public class StorageLockRequest {
++    private Long productId;
++    private Integer quantity;
++    private String orderNo;
++}
+\ No newline at end of file

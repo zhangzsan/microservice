@@ -21,8 +21,7 @@ public class AccountService {
     @Transactional(rollbackFor = Exception.class)
     public void deduct(AccountDeductRequest request) {
         UpdateWrapper<Account> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("user_id", request.getUserId())
-                .ge("balance", request.getAmount());
+        updateWrapper.eq("user_id", request.getUserId()).ge("balance", request.getAmount());
 
         Account account = new Account();
         account.setBalance(account.getBalance().subtract(request.getAmount()));
@@ -31,7 +30,7 @@ public class AccountService {
         if (updateCount == 0) {
             throw new BusinessException("余额不足或扣减失败");
         }
-        log.info("余额扣减成功，用户ID: {}, 金额: {}", request.getUserId(), request.getAmount());
+        log.info("余额扣减成功, 用户ID: {}, 金额: {}", request.getUserId(), request.getAmount());
     }
 
     @Transactional(rollbackFor = Exception.class)

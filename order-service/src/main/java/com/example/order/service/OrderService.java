@@ -114,7 +114,6 @@ public class OrderService {
         message.setQuantity(order.getQuantity());
         message.setUserId(order.getUserId());
         message.setAmount(order.getAmount());
-
         rocketMQTemplate.syncSend("order-timeout-topic",
                 MessageBuilder.withPayload(message).build(),
                 3000, 16); // 延迟级别16对应30分钟
