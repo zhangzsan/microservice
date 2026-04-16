@@ -1,4 +1,4 @@
-NEW_FILE_CODE
+
 package com.example.order.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -52,16 +52,16 @@ public class ResourceRollbackService {
                 return;
             }
 
-            OrderOperationLog log = new OrderOperationLog();
-            log.setOrderNo(message.getOrderNo());
-            log.setOperationType(OperationType.TIMEOUT_CANCEL.getValue());
-            log.setOperationStatus(OperationStatus.PROCESSING.getValue());
-            log.setRetryCount(0);
-            log.setMaxRetryCount(3);
-            log.setRequestData(objectMapper.writeValueAsString(message));
-            log.setNextRetryTime(LocalDateTime.now());
+            OrderOperationLog olog = new OrderOperationLog();
+            olog.setOrderNo(message.getOrderNo());
+            olog.setOperationType(OperationType.TIMEOUT_CANCEL.getValue());
+            olog.setOperationStatus(OperationStatus.PROCESSING.getValue());
+            olog.setRetryCount(0);
+            olog.setMaxRetryCount(3);
+            olog.setRequestData(objectMapper.writeValueAsString(message));
+            olog.setNextRetryTime(LocalDateTime.now());
 
-            operationLogMapper.insert(log);
+            operationLogMapper.insert(olog);
             log.info("创建回滚任务成功，订单号: {}", message.getOrderNo());
         } catch (Exception e) {
             log.error("创建回滚任务失败，订单号: {}", message.getOrderNo(), e);
@@ -70,22 +70,22 @@ public class ResourceRollbackService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public boolean executeRollback(Long logId) {
+    public void executeRollback(Long logId) {
         OrderOperationLog operationLog = operationLogMapper.selectById(logId);
         if (operationLog == null) {
             log.error("操作日志不存在，ID: {}", logId);
-            return false;
+            return;
         }
 
         if (operationLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
             log.info("任务已成功，无需重复执行，ID: {}", logId);
-            return true;
+            return;
         }
 
         if (operationLog.getRetryCount() >= operationLog.getMaxRetryCount()) {
             log.error("重试次数已达上限，需要人工介入，ID: {}", logId);
             updateLogStatus(logId, OperationStatus.FAILED, "重试次数已达上限");
-            return false;
+            return;
         }
 
         try {
@@ -98,7 +98,6 @@ public class ResourceRollbackService {
 
             updateLogStatus(logId, OperationStatus.SUCCESS, null);
             log.info("资源回滚成功，订单号: {}", message.getOrderNo());
-            return true;
 
         } catch (Exception e) {
             int retryCount = operationLog.getRetryCount() + 1;
@@ -116,7 +115,6 @@ public class ResourceRollbackService {
 
             log.error("资源回滚失败，将重试，订单号: {}, 重试次数: {}", 
                 operationLog.getOrderNo(), retryCount, e);
-            return false;
         }
     }
 

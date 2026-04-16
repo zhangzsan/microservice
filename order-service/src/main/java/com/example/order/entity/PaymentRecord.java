@@ -1,8 +1,5 @@
 package com.example.order.entity;
 
-NEW_FILE_CODE
-package com.example.order.entity;
-
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 import java.math.BigDecimal;

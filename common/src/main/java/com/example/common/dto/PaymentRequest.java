@@ -1,4 +1,4 @@
-NEW_FILE_CODE
+
 package com.example.common.dto;
 
 import lombok.Data;

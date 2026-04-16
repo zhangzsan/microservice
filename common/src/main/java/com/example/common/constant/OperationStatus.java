@@ -1,4 +1,3 @@
-NEW_FILE_CODE
 package com.example.common.constant;
 
 import lombok.Getter;

@@ -1,4 +1,4 @@
-NEW_FILE_CODE
+
 package com.example.order.entity;
 
 import com.baomidou.mybatisplus.annotation.*;

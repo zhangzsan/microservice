@@ -1,4 +1,3 @@
-NEW_FILE_CODE
 package com.example.order.task;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -43,11 +42,11 @@ public class RollbackCompensationTask {
 
         log.info("发现 {} 个需要补偿的任务", failedLogs.size());
 
-        for (OrderOperationLog log : failedLogs) {
+        for (OrderOperationLog blog : failedLogs) {
             try {
-                rollbackService.executeRollback(log.getId());
+                rollbackService.executeRollback(blog.getId());
             } catch (Exception e) {
-                log.error("补偿任务执行异常，ID: {}", log.getId(), e);
+                log.error("补偿任务执行异常，ID: {}", blog.getId(), e);
             }
         }
 

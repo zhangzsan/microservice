@@ -7,7 +7,6 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
-@EnableFeignClients
 @MapperScan("com.example.order.mapper")
 @EnableScheduling
 public class OrderServiceApplication {

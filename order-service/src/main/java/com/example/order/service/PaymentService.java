@@ -1,6 +1,4 @@
-package com.example.order.mapper;
 
-NEW_FILE_CODE
 package com.example.order.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -41,7 +39,7 @@ public class PaymentService {
         int updated = orderMapper.update(null, updateWrapper);
         
         if (updated > 0) {
-            savePaymentRecord(request, 1);
+            savePaymentRecord(request);
             log.info("订单支付成功，订单号: {}", request.getOrderNo());
             return Result.success("支付成功");
         }
@@ -76,17 +74,14 @@ public class PaymentService {
     @Transactional(rollbackFor = Exception.class)
     public Result<?> payOrder(String orderNo) {
         log.info("用户发起支付，订单号: {}", orderNo);
-        
         PaymentRequest request = new PaymentRequest();
         request.setOrderNo(orderNo);
         request.setTransactionId("TXN" + System.currentTimeMillis());
-        
         return processPayment(request);
     }
 
     public Object queryOrderStatus(String orderNo) {
-        Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>()
-                .eq(Order::getOrderNo, orderNo));
+        Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
         
         if (order == null) {
             throw new BusinessException("订单不存在");
@@ -95,14 +90,14 @@ public class PaymentService {
         return order;
     }
 
-    private void savePaymentRecord(PaymentRequest request, Integer status) {
+    private void savePaymentRecord(PaymentRequest request) {
         try {
             PaymentRecord record = new PaymentRecord();
             record.setOrderNo(request.getOrderNo());
             record.setTransactionId(request.getTransactionId());
             record.setPayAmount(request.getPayAmount());
             record.setPayChannel(request.getPayChannel());
-            record.setPayStatus(status);
+            record.setPayStatus(1);
             paymentRecordMapper.insert(record);
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("Duplicate entry")) {
