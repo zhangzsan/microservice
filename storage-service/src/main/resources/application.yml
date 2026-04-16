@@ -16,6 +16,10 @@ spring:
     alibaba:
       seata:
         enable: false
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
 
 seata:
   enabled: false

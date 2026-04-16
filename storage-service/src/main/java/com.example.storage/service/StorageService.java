@@ -20,14 +20,17 @@ public class StorageService {
 
     @Transactional(rollbackFor = Exception.class)
     public void deduct(StorageDeductRequest request) {
+        log.info("库存服务开始扣减库存，商品ID: {}, 数量: {}", request.getProductId(), request.getQuantity());
+
         UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("product_id", request.getProductId()).ge("residue", request.getQuantity());
+        updateWrapper.eq("product_id", request.getProductId())
+                .ge("residue", request.getQuantity());
 
-        Storage storage = new Storage();
-        storage.setUsed(storage.getUsed() + request.getQuantity());
-        storage.setResidue(storage.getResidue() - request.getQuantity());
+        Storage updateStorage = new Storage();
+        updateStorage.setUsed(request.getQuantity());
+        updateStorage.setResidue(-request.getQuantity());
 
-        int updateCount = storageMapper.update(storage, updateWrapper);
+        int updateCount = storageMapper.update(updateStorage, updateWrapper);
         if (updateCount == 0) {
             throw new BusinessException("库存不足或扣减失败");
         }
@@ -36,14 +39,17 @@ public class StorageService {
 
     @Transactional(rollbackFor = Exception.class)
     public void restore(StorageRestoreRequest request) {
+        log.info("库存服务开始恢复库存，商品ID: {}, 数量: {}", request.getProductId(), request.getQuantity());
+
         UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("product_id", request.getProductId()).ge("used", request.getQuantity());
+        updateWrapper.eq("product_id", request.getProductId())
+                .ge("used", request.getQuantity());
 
-        Storage storage = new Storage();
-        storage.setUsed(storage.getUsed() - request.getQuantity());
-        storage.setResidue(storage.getResidue() + request.getQuantity());
+        Storage updateStorage = new Storage();
+        updateStorage.setUsed(-request.getQuantity());
+        updateStorage.setResidue(request.getQuantity());
 
-        int updateCount = storageMapper.update(storage, updateWrapper);
+        int updateCount = storageMapper.update(updateStorage, updateWrapper);
         if (updateCount == 0) {
             throw new BusinessException("库存恢复失败");
         }

@@ -8,7 +8,7 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
-@FeignClient(name = "storage-service", fallback = StorageFeignFallback.class)
+@FeignClient(name = "storage-service")
 public interface StorageFeignClient {
     @PostMapping("/storage/deduct")
     Result<?> deduct(@RequestBody StorageDeductRequest request);

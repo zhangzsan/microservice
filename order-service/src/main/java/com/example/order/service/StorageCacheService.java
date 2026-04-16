@@ -24,19 +24,20 @@ public class StorageCacheService {
     private RedissonClient redissonClient;
 
     private static final String STOCK_KEY_PREFIX = "stock:product:";
+
     private static final String STOCK_LOCK_PREFIX = "lock:stock:product:";
 
     // Lua 脚本：检查库存并扣减，返回剩余库存；若库存不足返回 -1
     private static final String DEDUCT_LUA_SCRIPT =
-            "local key = KEYS[1]\n" +
-            "local quantity = tonumber(ARGV[1])\n" +
-            "local current = tonumber(redis.call('get', key) or '0')\n" +
-            "if current >= quantity then\n" +
-            "    local newStock = current - quantity\n" +
-            "    redis.call('set', key, tostring(newStock))\n" +
-            "    return newStock\n" +
-            "else\n" +
-            "    return -1\n" +
+            "local key = KEYS[1] " +
+            "local quantity = tonumber(ARGV[1]) " +
+            "local current = tonumber(redis.call('get', key) or '0') " +
+            "if current >= quantity then " +
+            "    local newStock = current - quantity " +
+            "    redis.call('set', key, tostring(newStock)) " +
+            "    return newStock " +
+            "else " +
+            "    return -1 " +
             "end";
 
     private RedisScript<Long> deductScript;
@@ -61,6 +62,7 @@ public class StorageCacheService {
      * Redis原子扣减库存(对外接口,返回是否成功）
      */
     public boolean deductStockWithRedis(Long productId, Integer quantity) {
+        log.info("开始扣减Redis库存，商品ID: {}, 扣减数量: {}", productId, quantity);
         Long remain = deductStockAtomic(productId, quantity);
         if (remain >= 0) {
             log.info("Redis库存预扣成功，商品ID: {}, 剩余库存: {}", productId, remain);

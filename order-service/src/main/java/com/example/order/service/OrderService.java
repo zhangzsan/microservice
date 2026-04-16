@@ -53,7 +53,7 @@ public class OrderService {
 
         String orderNo = generateOrderNo();
 
-        // 2. 调用库存服务扣减库存
+        // 2.调用库存服务扣减库存
         StorageDeductRequest storageRequest = new StorageDeductRequest();
         storageRequest.setProductId(request.getProductId());
         storageRequest.setQuantity(request.getQuantity());
@@ -64,7 +64,6 @@ public class OrderService {
             throw new BusinessException(storageResult.getMessage());
         }
 
-        // 3. 调用账户服务扣减余额
         AccountDeductRequest accountRequest = new AccountDeductRequest();
         accountRequest.setUserId(request.getUserId());
         accountRequest.setAmount(request.getAmount());
@@ -89,7 +88,6 @@ public class OrderService {
 
         // 6. 发送订单超时延迟消息(30分钟后)
         sendOrderTimeoutMessage(order);
-
         log.info("订单创建成功，订单号: {}", orderNo);
         return convertToDTO(order);
     }
