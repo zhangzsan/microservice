@@ -1,6 +1,3 @@
-package com.example.order.listener;
-
-NEW_FILE_CODE
 package com.example.order.controller;
 
 import com.example.common.dto.PaymentRequest;
