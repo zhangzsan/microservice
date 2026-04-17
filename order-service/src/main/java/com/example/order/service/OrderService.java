@@ -71,7 +71,7 @@ public class OrderService {
         storageRequest.setOrderNo(orderNo);
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
-            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity());
+            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(),orderNo);
             throw new BusinessException(storageResult.getMessage());
         }
 

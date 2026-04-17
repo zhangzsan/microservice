@@ -27,7 +27,8 @@ public class StorageCacheService {
 
     private static final String STOCK_LOCK_PREFIX = "lock:stock:product:";
 
-    // Lua 脚本：检查库存并扣减，返回剩余库存；若库存不足返回 -1
+    private static final String STOCK_RESTORE_IDEMPOTENT_PREFIX = "stock:restore:idempotent:";
+
     private static final String DEDUCT_LUA_SCRIPT =
             "local key = KEYS[1] " +
             "local quantity = tonumber(ARGV[1]) " +
@@ -66,27 +67,33 @@ public class StorageCacheService {
         }
     }
 
-    /**
-     * Redis库存恢复(直接增加,一般不需要原子性判断)
-     */
-    public void restoreStockWithRedis(Long productId, Integer quantity) {
-        String key = STOCK_KEY_PREFIX + productId;
-        Long newStock = redisTemplate.opsForValue().increment(key, quantity);
-        log.info("Redis库存恢复成功，商品ID: {}, 恢复后库存: {}", productId, newStock);
+    public void restoreStockWithRedis(Long productId, Integer quantity, String orderNo) {
+        String idempotentKey = STOCK_RESTORE_IDEMPOTENT_PREFIX + orderNo + ":" + productId;
+        
+        Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "1", 24, TimeUnit.HOURS);
+        
+        if (Boolean.FALSE.equals(isFirst)) {
+            log.warn("Redis库存已恢复, 幂等返回，商品ID: {}", productId);
+            return;
+        }
+        
+        try {
+            String key = STOCK_KEY_PREFIX + productId;
+            Long newStock = redisTemplate.opsForValue().increment(key, quantity);
+            log.info("Redis库存恢复成功，商品ID: {}, 恢复后库存: {}", productId, newStock);
+        } catch (Exception e) {
+            redisTemplate.delete(idempotentKey);
+            log.error("Redis库存恢复失败，商品ID: {}", productId, e);
+            throw e;
+        }
     }
 
-    /**
-     * 初始化商品库存到 Redis
-     */
     public void initStockToRedis(Long productId, Integer stock) {
         String key = STOCK_KEY_PREFIX + productId;
         redisTemplate.opsForValue().set(key, String.valueOf(stock));
         log.info("初始化Redis库存，商品ID: {}, 库存: {}", productId, stock);
     }
 
-    /**
-     * 使用 Redisson 分布式锁进行库存扣减(备用方案)
-     */
     public boolean deductStockWithLock(Long productId, Integer quantity) {
         String lockKey = STOCK_LOCK_PREFIX + productId;
         RLock lock = redissonClient.getLock(lockKey);

@@ -1,4 +1,3 @@
-
 package com.example.order.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -15,6 +14,7 @@ import com.example.order.mapper.OrderOperationLogMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,7 +48,11 @@ public class ResourceRollbackService {
                     .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
 
             if (existLog != null) {
-                log.warn("回滚任务已存在，订单号: {}", message.getOrderNo());
+                if (existLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
+                    log.warn("回滚任务已成功，无需重复创建，订单号: {}", message.getOrderNo());
+                } else {
+                    log.warn("回滚任务已存在且未完成，订单号: {}, 状态: {}", message.getOrderNo(), existLog.getOperationStatus());
+                }
                 return;
             }
 
@@ -63,8 +67,11 @@ public class ResourceRollbackService {
 
             operationLogMapper.insert(blog);
             log.info("创建回滚任务成功，订单号: {}", message.getOrderNo());
+            
+        } catch (DuplicateKeyException e) {
+            log.warn("回滚任务已存在(唯一索引冲突), 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
-            log.error("创建回滚任务失败，订单号: {}", message.getOrderNo(), e);
+            log.error("创建回滚任务失败, 订单号: {}", message.getOrderNo(), e);
             throw new RuntimeException("创建回滚任务失败", e);
         }
     }
@@ -73,27 +80,25 @@ public class ResourceRollbackService {
     public void executeRollback(Long logId) {
         OrderOperationLog operationLog = operationLogMapper.selectById(logId);
         if (operationLog == null) {
-            log.error("操作日志不存在，ID: {}", logId);
+            log.error("操作日志不存在, ID: {}", logId);
             return;
         }
 
         if (operationLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
-            log.info("任务已成功，无需重复执行，ID: {}", logId);
+            log.info("任务已成功, 无需重复执行，ID: {}, 订单号: {}", logId, operationLog.getOrderNo());
             return;
         }
 
         if (operationLog.getRetryCount() >= operationLog.getMaxRetryCount()) {
-            log.error("重试次数已达上限，需要人工介入，ID: {}", logId);
+            log.error("重试次数已达上限, 需要人工介入, ID: {}, 订单号: {}", logId, operationLog.getOrderNo());
             updateLogStatus(logId, OperationStatus.FAILED, "重试次数已达上限");
             return;
         }
 
         try {
-            OrderTimeoutMessage message = objectMapper.readValue(
-                operationLog.getRequestData(), OrderTimeoutMessage.class);
+            OrderTimeoutMessage message = objectMapper.readValue(operationLog.getRequestData(), OrderTimeoutMessage.class);
 
             rollbackStorage(message);
-            rollbackAccount(message);
             rollbackRedisStock(message);
 
             updateLogStatus(logId, OperationStatus.SUCCESS, null);
@@ -123,8 +128,14 @@ public class ResourceRollbackService {
         request.setProductId(message.getProductId());
         request.setQuantity(message.getQuantity());
         request.setOrderNo(message.getOrderNo());
-        storageFeignClient.restore(request);
-        log.info("库存回滚成功，订单号: {}", message.getOrderNo());
+        
+        try {
+            storageFeignClient.restore(request);
+            log.info("库存回滚成功，订单号: {}", message.getOrderNo());
+        } catch (Exception e) {
+            log.error("库存回滚失败，订单号: {}", message.getOrderNo(), e);
+            throw e;
+        }
     }
 
     private void rollbackAccount(OrderTimeoutMessage message) {
@@ -132,13 +143,24 @@ public class ResourceRollbackService {
         request.setUserId(message.getUserId());
         request.setAmount(message.getAmount());
         request.setOrderNo(message.getOrderNo());
-        accountFeignClient.restore(request);
-        log.info("余额回滚成功，订单号: {}", message.getOrderNo());
+        
+        try {
+            accountFeignClient.restore(request);
+            log.info("余额回滚成功，订单号: {}", message.getOrderNo());
+        } catch (Exception e) {
+            log.error("余额回滚失败，订单号: {}", message.getOrderNo(), e);
+            throw e;
+        }
     }
 
     private void rollbackRedisStock(OrderTimeoutMessage message) {
-        storageCacheService.restoreStockWithRedis(message.getProductId(), message.getQuantity());
-        log.info("Redis库存回滚成功，订单号: {}", message.getOrderNo());
+        try {
+            storageCacheService.restoreStockWithRedis(message.getProductId(), message.getQuantity(),message.getOrderNo());
+            log.info("Redis库存回滚成功，订单号: {}", message.getOrderNo());
+        } catch (Exception e) {
+            log.error("Redis库存回滚失败，订单号: {}", message.getOrderNo(), e);
+            throw e;
+        }
     }
 
     private void updateLogStatus(Long logId, OperationStatus status, String errorMessage) {
