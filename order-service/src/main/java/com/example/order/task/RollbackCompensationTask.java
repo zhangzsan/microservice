@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
+//优化定时补偿任务-批量处理
 @Component
 @Slf4j
 public class RollbackCompensationTask {
@@ -33,6 +35,7 @@ public class RollbackCompensationTask {
                     OperationStatus.PROCESSING.getValue(), 
                     OperationStatus.FAILED.getValue())
                 .le(OrderOperationLog::getNextRetryTime, LocalDateTime.now())
+                .orderByAsc(OrderOperationLog::getNextRetryTime)
                 .last("LIMIT 100"));
 
         if (failedLogs.isEmpty()) {
@@ -41,13 +44,17 @@ public class RollbackCompensationTask {
         }
 
         log.info("发现 {} 个需要补偿的任务", failedLogs.size());
-        for (OrderOperationLog blog : failedLogs) {
-            try {
-                rollbackService.executeRollback(blog.getId());
-            } catch (Exception e) {
-                log.error("补偿任务执行异常，ID: {}", blog.getId(), e);
-            }
+        
+        List<Long> logIds = failedLogs.stream()
+            .map(OrderOperationLog::getId)
+            .collect(Collectors.toList());
+        
+        try {
+            rollbackService.executeBatchRollback(logIds);
+        } catch (Exception e) {
+            log.error("批量补偿任务执行异常", e);
         }
+        
         log.info("回滚补偿任务执行完成");
     }
 }

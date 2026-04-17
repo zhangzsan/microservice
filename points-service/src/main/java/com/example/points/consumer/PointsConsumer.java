@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
-@RocketMQMessageListener(topic = "points-topic", consumerGroup = "points-consumer-group")
+@RocketMQMessageListener(topic = "points-tx-topic", consumerGroup = "points-consumer-group")
 @Slf4j
 public class PointsConsumer implements RocketMQListener<PointsMessage> {
 

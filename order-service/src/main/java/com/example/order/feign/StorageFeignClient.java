@@ -14,5 +14,5 @@ public interface StorageFeignClient {
     Result<?> deduct(@RequestBody StorageDeductRequest request);
 
     @PostMapping("/storage/restore")
-    void restore(@RequestBody StorageRestoreRequest request);
+    Result<?> restore(@RequestBody StorageRestoreRequest request);
 }

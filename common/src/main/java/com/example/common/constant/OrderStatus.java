@@ -7,7 +7,8 @@ public enum OrderStatus {
     PENDING(0, "待支付"),
     PAID(1, "已支付"),
     CANCELLED(2, "已取消"),
-    TIMEOUT(3, "已超时");
+    TIMEOUT(3, "已超时"),
+    REFUND(4, "已退单");
 
     private final int value;
     private final String desc;

@@ -15,11 +15,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
+/**
+ * 优化 ResourceRollbackService - 异步批量处理
+ */
 @Service
 @Slf4j
 public class ResourceRollbackService {
@@ -76,6 +82,17 @@ public class ResourceRollbackService {
         }
     }
 
+    @Async("rollbackExecutor")
+    public CompletableFuture<Void> createRollbackTaskAsync(OrderTimeoutMessage message) {
+        try {
+            createRollbackTask(message);
+            return CompletableFuture.completedFuture(null);
+        } catch (Exception e) {
+            log.error("异步创建回滚任务失败，订单号: {}", message.getOrderNo(), e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void executeRollback(Long logId) {
         OrderOperationLog operationLog = operationLogMapper.selectById(logId);
@@ -123,12 +140,23 @@ public class ResourceRollbackService {
         }
     }
 
+    public void executeBatchRollback(List<Long> logIds) {
+        log.info("开始批量执行回滚任务，数量: {}", logIds.size());
+        for (Long logId : logIds) {
+            try {
+                executeRollback(logId);
+            } catch (Exception e) {
+                log.error("批量回滚中单个任务失败，ID: {}", logId, e);
+            }
+        }
+        log.info("批量回滚任务完成，数量: {}", logIds.size());
+    }
+
     private void rollbackStorage(OrderTimeoutMessage message) {
         StorageRestoreRequest request = new StorageRestoreRequest();
         request.setProductId(message.getProductId());
         request.setQuantity(message.getQuantity());
         request.setOrderNo(message.getOrderNo());
-        
         try {
             storageFeignClient.restore(request);
             log.info("库存回滚成功，订单号: {}", message.getOrderNo());

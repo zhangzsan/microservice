@@ -1,7 +1,5 @@
 package com.example.account.service;
 
-import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.example.account.entity.Account;
 import com.example.account.mapper.AccountMapper;
 import com.example.common.dto.AccountDeductRequest;
 import com.example.common.dto.AccountRestoreRequest;
@@ -47,7 +45,7 @@ public class AccountService {
         }
 
         try {
-            log.info("账户服务开始恢复库存, 金额: {}, 订单号: {}", request.getAmount(), request.getOrderNo());
+            log.info("账户服务开始恢复, 金额: {}, 订单号: {}", request.getAmount(), request.getOrderNo());
 
             int updateCount = accountMapper.restoreBalance(request.getUserId(), request.getAmount());
             if (updateCount == 0) {
