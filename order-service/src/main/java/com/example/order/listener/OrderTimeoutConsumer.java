@@ -27,15 +27,14 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void onMessage(OrderTimeoutMessage message) {
-        log.info("接收到订单超时消息，订单号: {}", message.getOrderNo());
-
+        log.info("接收到订单超时消息,订单号: {}", message.getOrderNo());
         LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
                 .eq(Order::getOrderNo, message.getOrderNo())
                 .eq(Order::getStatus, OrderStatus.PENDING.getValue())
                 .set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
 
+        //数据库的cas操作控制重复操作
         int updated = orderMapper.update(null, updateWrapper);
-
         if (updated > 0) {
             log.info("订单状态更新为超时成功，创建回滚任务，订单号: {}", message.getOrderNo());
             rollbackService.createRollbackTask(message);

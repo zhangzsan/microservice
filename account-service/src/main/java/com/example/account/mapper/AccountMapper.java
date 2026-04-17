@@ -11,4 +11,7 @@ public interface AccountMapper extends BaseMapper<Account> {
 
     @Update("update t_account set balance = balance - #{amount} where user_id = #{userId} and balance >=#{amount}")
     int updateBalance(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
+
+    @Update("update t_account set balance = balance + #{amount} where user_id = #{userId}")
+    int restoreBalance(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
 }

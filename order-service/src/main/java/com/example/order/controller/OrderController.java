@@ -23,13 +23,13 @@ public class OrderController {
 
     @PostMapping("/pay/{orderNo}")
     public Result<?> payOrder(@PathVariable String orderNo) {
-        log.info("用户发起支付，订单号: {}", orderNo);
+        log.info("用户发起支付, 订单号: {}", orderNo);
         return orderService.payOrder(orderNo);
     }
 
     @GetMapping("/status/{orderNo}")
     public Result<?> queryOrderStatus(@PathVariable String orderNo) {
-        log.info("查询订单状态，订单号: {}", orderNo);
+        log.info("查询订单状态, 订单号: {}", orderNo);
         return Result.success(orderService.queryOrderStatus(orderNo));
     }
 }

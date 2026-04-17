@@ -15,10 +15,11 @@ spring:
         server-addr: localhost:8848
     alibaba:
       seata:
+        enabled: false
         tx-service-group: my_tx_group
 
 seata:
-  enabled: true
+  enabled: false
   application-id: ${spring.application.name}
   tx-service-group: my_tx_group
   service:

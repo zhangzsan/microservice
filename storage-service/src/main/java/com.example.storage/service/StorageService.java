@@ -62,9 +62,7 @@ public class StorageService {
                 log.error("库存恢复失败, 可能已恢复过，订单号: {}", request.getOrderNo());
                 throw new BusinessException("库存恢复失败");
             }
-            
             log.info("库存恢复成功，商品ID: {}, 数量: {}, 订单号: {}", request.getProductId(), request.getQuantity(), request.getOrderNo());
-            
         } catch (Exception e) {
             stringRedisTemplate.delete(idempotentKey);
             log.error("库存恢复异常，订单号: {}", request.getOrderNo(), e);

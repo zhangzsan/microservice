@@ -52,12 +52,11 @@ public class OrderService {
     @Autowired
     private RedissonClient redissonClient;
 
-
     @GlobalTransactional(name = "create-order", rollbackFor = Exception.class)
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
         //1. redis预扣减库存
-        log.info("开始创建订单，用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
+        log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(request.getProductId(), request.getQuantity());
         if (!cacheDeductSuccess) {
             throw new BusinessException("库存不足,请选择其他商品下单");
@@ -71,7 +70,7 @@ public class OrderService {
         storageRequest.setOrderNo(orderNo);
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
-            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(),orderNo);
+            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
             throw new BusinessException(storageResult.getMessage());
         }
 
@@ -99,8 +98,8 @@ public class OrderService {
         Message<PointsMessage> message = MessageBuilder.withPayload(pointsMessage)
                 .setHeader("order_no", order.getOrderNo())
                 .build();
-        rocketMQTemplate.sendMessageInTransaction("points-topic", message, order.getOrderNo());
-        log.info("发送积分事务消息，订单号: {}", order.getOrderNo());
+        rocketMQTemplate.convertAndSend("points-topic", message);
+        log.info("发送积分事务消息, 订单号: {}", order.getOrderNo());
     }
 
     private void sendOrderTimeoutMessage(Order order) {
@@ -147,7 +146,7 @@ public class OrderService {
     }
 
     /**
-     *  调用支付订单
+     * 调用支付订单
      */
     @Transactional(rollbackFor = Exception.class)
     public Result<?> payOrder(String orderNo) {
@@ -171,7 +170,7 @@ public class OrderService {
         }
     }
 
-    @GlobalTransactional(name = "pay-order-tx", rollbackFor = Exception.class)
+    //    @GlobalTransactional(name = "pay-order-tx", rollbackFor = Exception.class)
     @Transactional(rollbackFor = Exception.class)
     public Result<?> doPayOrder(String orderNo) {
         log.info("开始调用支付服务,订单号: {}", orderNo);
@@ -222,6 +221,8 @@ public class OrderService {
         PaymentRequest paymentRequest = new PaymentRequest();
         paymentRequest.setOrderNo(orderNo);
         paymentRequest.setTransactionId("TXN" + System.currentTimeMillis() + orderNo);
+        paymentRequest.setPayAmount(order.getAmount());
+        paymentRequest.setPayChannel(1);
         Result<?> result = paymentFeignClient.insertPayment(paymentRequest);
         if (!result.isSuccess()) {
             log.error("添加支付信息失败, 订单号: {}, 原因: {}", orderNo, result.getMessage());
