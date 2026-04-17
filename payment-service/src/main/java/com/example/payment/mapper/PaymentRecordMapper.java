@@ -1,8 +1,7 @@
-
-package com.example.order.mapper;
+package com.example.payment.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.example.order.entity.PaymentRecord;
+import com.example.payment.entity.PaymentRecord;
 import org.apache.ibatis.annotations.Mapper;
 
 @Mapper

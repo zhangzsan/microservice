@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 public class PointsFeignFallback implements PointsFeignClient {
 
     @Override
-    public Result addPoints(PointsMessage pointsMessage) {
+    public Result<?> addPoints(PointsMessage pointsMessage) {
         // 降级处理：记录日志，不阻塞主流程
         return Result.error("积分服务异常，积分增加失败");
     }

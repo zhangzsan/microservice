@@ -41,7 +41,6 @@ public class RollbackCompensationTask {
         }
 
         log.info("发现 {} 个需要补偿的任务", failedLogs.size());
-
         for (OrderOperationLog blog : failedLogs) {
             try {
                 rollbackService.executeRollback(blog.getId());
@@ -49,7 +48,6 @@ public class RollbackCompensationTask {
                 log.error("补偿任务执行异常，ID: {}", blog.getId(), e);
             }
         }
-
         log.info("回滚补偿任务执行完成");
     }
 }

@@ -9,12 +9,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class AccountFeignFallback implements AccountFeignClient {
     @Override
-    public Result deduct(AccountDeductRequest request) {
+    public Result<?> deduct(AccountDeductRequest request) {
         return Result.error("账户服务异常，请稍后重试");
     }
 
     @Override
-    public Result restore(AccountRestoreRequest request) {
+    public Result<?> restore(AccountRestoreRequest request) {
         return Result.error("账户服务异常");
     }
 }

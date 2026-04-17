@@ -1,4 +1,3 @@
-// PointsTransactionListener.java
 package com.example.order.listener;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -32,8 +31,7 @@ public class PointsTransactionListener implements RocketMQLocalTransactionListen
         String orderNo = (String) arg;
         log.info("执行本地事务,订单号: {}", orderNo);
         try {
-            Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>()
-                    .eq(Order::getOrderNo, orderNo));
+            Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             
             if (order == null) {
                 log.error("订单不存在，订单号: {}", orderNo);
@@ -69,14 +67,11 @@ public class PointsTransactionListener implements RocketMQLocalTransactionListen
         String orderNo = (String) msg.getHeaders().get("order_no");
         log.info("回查事务状态，订单号: {}", orderNo);
         try {
-            Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>()
-                    .eq(Order::getOrderNo, orderNo));
-            
+            Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (order == null) {
                 log.warn("订单不存在，回滚事务，订单号: {}", orderNo);
                 return RocketMQLocalTransactionState.ROLLBACK;
             }
-            
             if (order.getStatus() == OrderStatus.PAID.getValue()) {
                 log.info("订单已支付，提交事务，订单号: {}", orderNo);
                 return RocketMQLocalTransactionState.COMMIT;

@@ -101,7 +101,7 @@ public class ResourceRollbackService {
 
         } catch (Exception e) {
             int retryCount = operationLog.getRetryCount() + 1;
-            LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(retryCount * 5);
+            LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(retryCount * 5L);
 
             LambdaUpdateWrapper<OrderOperationLog> updateWrapper = 
                 new LambdaUpdateWrapper<OrderOperationLog>()
