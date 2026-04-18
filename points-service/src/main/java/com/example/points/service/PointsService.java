@@ -34,7 +34,6 @@ public class PointsService {
         record.setOrderNo(message.getOrderNo());
         record.setPoints(message.getPoints());
         record.setCreateTime(LocalDateTime.now());
-
         try {
             pointsRecordMapper.insert(record);
             log.info("增加积分成功，用户ID: {}, 积分: {}", message.getUserId(), message.getPoints());

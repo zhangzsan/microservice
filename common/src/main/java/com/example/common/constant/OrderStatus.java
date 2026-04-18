@@ -2,6 +2,9 @@ package com.example.common.constant;
 
 import lombok.Getter;
 
+/**
+ * 状态机流转的问题
+ */
 @Getter
 public enum OrderStatus {
     PENDING(0, "待支付"),

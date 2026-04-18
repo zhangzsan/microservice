@@ -30,9 +30,7 @@ public class RollbackCompensationTask {
         log.info("开始执行回滚补偿任务");
         List<OrderOperationLog> failedLogs = operationLogMapper.selectList(
             new LambdaQueryWrapper<OrderOperationLog>()
-                .in(OrderOperationLog::getOperationStatus, 
-                    OperationStatus.PROCESSING.getValue(), 
-                    OperationStatus.FAILED.getValue())
+                .in(OrderOperationLog::getOperationStatus, OperationStatus.PROCESSING.getValue(), OperationStatus.FAILED.getValue())
                 .le(OrderOperationLog::getNextRetryTime, LocalDateTime.now())
                 .orderByAsc(OrderOperationLog::getNextRetryTime)
                 .last("LIMIT 100"));

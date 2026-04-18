@@ -43,14 +43,14 @@ public class PointsTransactionListener implements RocketMQLocalTransactionListen
         try {
             Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (order != null) {
-                log.info("事务回查：订单存在，提交消息，订单号: {}", orderNo);
+                log.info("事务回查: 订单存在, 提交消息, 订单号: {}", orderNo);
                 return RocketMQLocalTransactionState.COMMIT;
             } else {
-                log.warn("事务回查：订单不存在，回滚消息，订单号: {}", orderNo);
+                log.warn("事务回查：订单不存在, 回滚消息, 订单号: {}", orderNo);
                 return RocketMQLocalTransactionState.ROLLBACK;
             }
         } catch (Exception e) {
-            log.error("事务回查异常，订单号: {}", orderNo, e);
+            log.error("事务回查异常, 订单号: {}", orderNo, e);
             return RocketMQLocalTransactionState.UNKNOWN;
         }
     }

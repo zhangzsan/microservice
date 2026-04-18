@@ -3,6 +3,7 @@ package com.example.order.task;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.common.constant.OrderStatus;
+import com.example.common.dto.AccountRestoreRequest;
 import com.example.common.dto.PointsMessage;
 import com.example.common.result.Result;
 import com.example.order.constant.CompensationResult;
@@ -33,7 +34,7 @@ public class PaymentCompensationTask {
     @Autowired
     private AccountFeignClient accountFeignClient;
 
-    @Scheduled(fixedDelay = 300000)
+    @Scheduled(fixedDelay = 300000) //每5分钟执行一次
     public void compensateStuckPayments() {
         log.info("开始执行支付异常订单补偿任务");
         
@@ -61,8 +62,6 @@ public class PaymentCompensationTask {
                 CompensationResult result = handleStuckOrder(order);
                 switch (result) {
                     case COMPENSATED:
-                        successCount++;
-                        break;
                     case NO_ACTION_NEEDED:
                         successCount++;
                         break;
@@ -74,7 +73,7 @@ public class PaymentCompensationTask {
                         break;
                 }
             } catch (Exception e) {
-                log.error("补偿订单异常，订单号: {}", order.getOrderNo(), e);
+                log.error("补偿订单异常, 订单号: {}", order.getOrderNo(), e);
                 failCount++;
             }
         }
@@ -84,17 +83,16 @@ public class PaymentCompensationTask {
 
     private CompensationResult handleStuckOrder(Order order) {
         String orderNo = order.getOrderNo();
-        log.info("处理卡单订单，订单号: {}, 用户ID: {}, 创建时间: {}", 
-            orderNo, order.getUserId(), order.getCreatedTime());
+        log.info("处理卡单订单, 订单号: {}, 用户ID: {}, 创建时间: {}", orderNo, order.getUserId(), order.getCreatedTime());
 
         PaymentRecord paymentRecord = paymentRecordMapper.selectOne(
             new LambdaQueryWrapper<PaymentRecord>().eq(PaymentRecord::getOrderNo, orderNo));
 
         if (paymentRecord != null) {
-            log.warn("订单存在支付记录但未更新状态，尝试补偿，订单号: {}", orderNo);
+            log.warn("订单存在支付记录但未更新状态, 尝试补偿，订单号: {}", orderNo);
             return compensatePaidOrder(order, paymentRecord);
         } else {
-            log.info("订单无支付记录，检查是否需要取消，订单号: {}", orderNo);
+            log.info("订单无支付记录, 检查是否需要取消，订单号: {}", orderNo);
             return handleUnpaidOrder(order);
         }
     }
@@ -105,17 +103,13 @@ public class PaymentCompensationTask {
         
         try {
             LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
-                .eq(Order::getOrderNo, orderNo)
-                .eq(Order::getStatus, OrderStatus.PENDING.getValue())
-                .set(Order::getStatus, OrderStatus.PAID.getValue());
+                .eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.PAID.getValue());
 
             int updated = orderMapper.update(null, updateWrapper);
             
             if (updated > 0) {
                 log.info("订单状态补偿成功，订单号: {}, 从PENDING更新为PAID", orderNo);
-                
                 sendPointsMessage(order);
-                
                 return CompensationResult.COMPENSATED;
             } else {
                 Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -123,11 +117,10 @@ public class PaymentCompensationTask {
                     log.info("订单已被其他线程补偿为PAID，订单号: {}", orderNo);
                     return CompensationResult.NO_ACTION_NEEDED;
                 } else if (currentOrder.getStatus() == OrderStatus.TIMEOUT.getValue()) {
-                    log.warn("订单已超时，需要回滚支付，订单号: {}", orderNo);
+                    log.warn("订单已超时，需要回滚支付, 订单号: {}", orderNo);
                     return rollbackPaymentAndNotify(order, paymentRecord);
                 } else {
-                    log.error("订单状态异常，需要人工介入，订单号: {}, 当前状态: {}", 
-                        orderNo, currentOrder.getStatus());
+                    log.error("订单状态异常，需要人工介入, 订单号: {}, 当前状态: {}", orderNo, currentOrder.getStatus());
                     return CompensationResult.MANUAL_INTERVENTION;
                 }
             }
@@ -142,9 +135,8 @@ public class PaymentCompensationTask {
         String orderNo = order.getOrderNo();
         
         try {
-            log.warn("订单已超时但存在支付记录，需要回滚，订单号: {}", orderNo);
-            com.example.common.dto.AccountRestoreRequest restoreRequest = 
-                new com.example.common.dto.AccountRestoreRequest();
+            log.warn("订单已超时但存在支付记录, 需要回滚，订单号: {}", orderNo);
+            AccountRestoreRequest restoreRequest = new AccountRestoreRequest();
             restoreRequest.setOrderNo(orderNo);
             restoreRequest.setUserId(order.getUserId());
             restoreRequest.setAmount(order.getAmount());
@@ -152,10 +144,9 @@ public class PaymentCompensationTask {
             Result<?> restoreResult = accountFeignClient.restore(restoreRequest);
             
             if (restoreResult.isSuccess()) {
-                log.info("账户扣款回滚成功，订单号: {}", orderNo);
+                log.info("账户扣款回滚成功, 订单号: {}", orderNo);
             } else {
-                log.error("账户扣款回滚失败，需要人工介入，订单号: {}, 原因: {}", 
-                    orderNo, restoreResult.getMessage());
+                log.error("账户扣款回滚失败, 需要人工介入, 订单号: {}, 原因: {}", orderNo, restoreResult.getMessage());
                 return CompensationResult.MANUAL_INTERVENTION;
             }
             
@@ -185,12 +176,11 @@ public class PaymentCompensationTask {
         }
         
         if (currentOrder.getStatus() != OrderStatus.PENDING.getValue()) {
-            log.warn("订单状态异常，需要人工介入，订单号: {}, 当前状态: {}", 
-                orderNo, currentOrder.getStatus());
+            log.warn("订单状态异常, 需要人工介入, 订单号: {}, 当前状态: {}", orderNo, currentOrder.getStatus());
             return CompensationResult.MANUAL_INTERVENTION;
         }
         
-        log.info("订单未支付且仍为PENDING状态，等待超时消息处理，订单号: {}", orderNo);
+        log.info("订单未支付且仍为PENDING状态, 等待超时消息处理, 订单号: {}", orderNo);
         return CompensationResult.NO_ACTION_NEEDED;
     }
 
@@ -199,11 +189,10 @@ public class PaymentCompensationTask {
             PointsMessage pointsMessage = new PointsMessage();
             pointsMessage.setOrderNo(order.getOrderNo());
             pointsMessage.setUserId(order.getUserId());
-            //TODO
             pointsMessage.setPoints(order.getAmount().intValue());
-            log.info("补偿发送积分消息，订单号: {}", order.getOrderNo());
+            log.info("补偿发送积分消息, 订单号: {}", order.getOrderNo());
         } catch (Exception e) {
-            log.error("发送积分消息失败，订单号: {}", order.getOrderNo(), e);
+            log.error("发送积分消息失败, 订单号: {}", order.getOrderNo(), e);
         }
     }
 }

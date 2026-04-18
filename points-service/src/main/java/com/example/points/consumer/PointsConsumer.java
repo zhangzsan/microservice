@@ -19,6 +19,7 @@ public class PointsConsumer implements RocketMQListener<PointsMessage> {
     @Override
     public void onMessage(PointsMessage message) {
         log.info("接收到积分消息，订单号: {}", message.getOrderNo());
+        //需控制增加积分是否幂等操作
         pointsService.addPoints(message);
     }
 }

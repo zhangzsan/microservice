@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
+import java.util.Arrays;
 
 @Service
 @Slf4j
@@ -41,11 +42,25 @@ public class StorageCacheService {
             "    return -1 " +
             "end";
 
+    private static final String RESTORE_LUA_SCRIPT =
+            "local idempotentKey = KEYS[1] " +
+            "local stockKey = KEYS[2] " +
+            "local quantity = tonumber(ARGV[1]) " +
+            "if redis.call('EXISTS', idempotentKey) == 0 then " +
+            "    redis.call('SETEX', idempotentKey, 86400, '1') " +
+            "    local newStock = redis.call('INCRBY', stockKey, quantity) " +
+            "    return newStock " +
+            "else " +
+            "    return -1 " +
+            "end";
+
     private RedisScript<Long> deductScript;
+    private RedisScript<Long> restoreScript;
 
     @PostConstruct
     public void init() {
         deductScript = new DefaultRedisScript<>(DEDUCT_LUA_SCRIPT, Long.class);
+        restoreScript = new DefaultRedisScript<>(RESTORE_LUA_SCRIPT, Long.class);
     }
 
 
@@ -62,37 +77,29 @@ public class StorageCacheService {
             log.info("Redis库存预扣成功，商品ID: {}, 剩余库存: {}", productId, remain);
             return true;
         } else {
-            log.warn("Redis库存不足，商品ID: {}, 请求数量: {}", productId, quantity);
+            log.warn("Redis库存不足, 商品ID: {}, 请求数量: {}", productId, quantity);
             return false;
         }
     }
 
-    public void restoreStockWithRedis(Long productId, Integer quantity, String orderNo) {
+    public boolean restoreStockWithRedis(Long productId, Integer quantity, String orderNo) {
         String idempotentKey = STOCK_RESTORE_IDEMPOTENT_PREFIX + orderNo + ":" + productId;
-        
-        Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "1", 24, TimeUnit.HOURS);
-        
-        if (Boolean.FALSE.equals(isFirst)) {
-            log.warn("Redis库存已恢复, 幂等返回，商品ID: {}", productId);
-            return;
-        }
-        
+        String stockKey = STOCK_KEY_PREFIX + productId;
+
         try {
-            String key = STOCK_KEY_PREFIX + productId;
-            Long newStock = redisTemplate.opsForValue().increment(key, quantity);
-            log.info("Redis库存恢复成功，商品ID: {}, 恢复后库存: {}", productId, newStock);
+            Long result = redisTemplate.execute(restoreScript, Arrays.asList(idempotentKey, stockKey), String.valueOf(quantity));
+            if (result != -1) {
+                log.info("Redis库存原子性恢复成功，商品ID: {}, 恢复后库存: {}", productId, result);
+            } else {
+                log.warn("Redis库存已恢复(幂等拦截), 商品ID: {}, 订单号: {}", productId, orderNo);
+            }
+            return true;
         } catch (Exception e) {
-            redisTemplate.delete(idempotentKey);
-            log.error("Redis库存恢复失败, 商品ID: {}", productId, e);
-            throw e;
+            log.error("Redis库存恢复脚本执行异常, 商品ID: {}, 订单号: {}", productId, orderNo, e);
+            return false;
         }
     }
 
-    public void initStockToRedis(Long productId, Integer stock) {
-        String key = STOCK_KEY_PREFIX + productId;
-        redisTemplate.opsForValue().set(key, String.valueOf(stock));
-        log.info("初始化Redis库存，商品ID: {}, 库存: {}", productId, stock);
-    }
 
     public boolean deductStockWithLock(Long productId, Integer quantity) {
         String lockKey = STOCK_LOCK_PREFIX + productId;

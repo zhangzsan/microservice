@@ -17,12 +17,19 @@ public class StorageController {
     @Autowired
     private StorageService storageService;
 
+    /**
+     *  扣减库存
+     */
     @PostMapping("/deduct")
     public Result<?> deduct(@RequestBody StorageDeductRequest request) {
         storageService.deduct(request);
         return Result.success();
     }
 
+    /**
+     *
+     * 恢复库存
+     */
     @PostMapping("/restore")
     public Result<?> restore(@RequestBody StorageRestoreRequest request) {
         storageService.restore(request);

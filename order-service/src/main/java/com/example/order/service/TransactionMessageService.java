@@ -1,10 +1,12 @@
 package com.example.order.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.example.common.exception.BusinessException;
 import com.example.order.constant.MessageStatus;
 import com.example.order.entity.TransactionMessage;
 import com.example.order.mapper.TransactionMessageMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -35,6 +38,9 @@ public class TransactionMessageService {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /**
+     * 配合redis缓存数据
+     */
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
@@ -89,7 +95,7 @@ public class TransactionMessageService {
         
         if (message.getStatus().equals(MessageStatus.PENDING.getValue())) {
             long score = message.getNextRetryTime()
-                .atZone(java.time.ZoneId.systemDefault())
+                .atZone(ZoneId.systemDefault())
                 .toInstant()
                 .toEpochMilli();
             
@@ -99,7 +105,7 @@ public class TransactionMessageService {
                 score
             );
             
-            log.debug("消息已加入Redis调度队列，ID: {}, 时间戳: {}", message.getId(), score);
+            log.debug("消息已加入Redis调度队列, ID: {}, 时间戳: {}", message.getId(), score);
         }
     }
 
@@ -120,13 +126,10 @@ public class TransactionMessageService {
             String lockKey = LOCK_KEY_PREFIX + messageId;
             String lockOwner = Thread.currentThread().getId() + ":" + System.currentTimeMillis();
             
-            Long acquired = stringRedisTemplate.execute(
-                acquireLockScript,
-                    List.of(lockKey), "30"
-            );
+            Long acquired = stringRedisTemplate.execute(acquireLockScript, List.of(lockKey), "30");
             
             if (acquired == 0) {
-                log.debug("消息正在处理中，跳过，ID: {}", messageId);
+                log.debug("消息正在处理中,跳过, ID: {}", messageId);
                 continue;
             }
 
@@ -135,7 +138,7 @@ public class TransactionMessageService {
                 TransactionMessage message = transactionMessageMapper.selectById(id);
                 
                 if (message == null) {
-                    log.warn("消息不存在，从Redis清理，ID: {}", messageId);
+                    log.warn("消息不存在, 从Redis清理，ID: {}", messageId);
                     cleanupMessage(messageId);
                     continue;
                 }
@@ -161,13 +164,9 @@ public class TransactionMessageService {
 
     private void releaseLock(String lockKey, String lockOwner) {
         try {
-            stringRedisTemplate.execute(
-                releaseLockScript,
-                    Collections.singletonList(lockKey),
-                lockOwner
-            );
+            stringRedisTemplate.execute(releaseLockScript, Collections.singletonList(lockKey), lockOwner);
         } catch (Exception e) {
-            log.error("释放锁失败，lockKey: {}", lockKey, e);
+            log.error("释放锁失败, lockKey: {}", lockKey, e);
         }
     }
 
@@ -188,12 +187,10 @@ public class TransactionMessageService {
                 log.info("事务消息发送成功，messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
             } catch (Exception e) {
                 log.error("发送事务消息失败，messageId: {}", message.getMessageId(), e);
-                throw e;
+                throw new BusinessException("发送事务消息失败:" + e.getMessage());
             }
         } else {
-            rocketMQTemplate.syncSend(destination, 
-                MessageBuilder.withPayload(message.getMessageBody()).build());
-            
+            rocketMQTemplate.syncSend(destination, MessageBuilder.withPayload(message.getMessageBody()).build());
             updateMessageStatus(message.getId());
             log.info("普通消息发送成功，messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
         }
@@ -201,7 +198,7 @@ public class TransactionMessageService {
 
     private String extractOrderNo(String messageBody) {
         try {
-            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(messageBody);
+            JsonNode node = objectMapper.readTree(messageBody);
             return node.has("orderNo") ? node.get("orderNo").asText() : "unknown";
         } catch (Exception e) {
             return "unknown";
@@ -210,8 +207,7 @@ public class TransactionMessageService {
 
     private void updateMessageStatus(Long id) {
         LambdaUpdateWrapper<TransactionMessage> updateWrapper = 
-            new LambdaUpdateWrapper<TransactionMessage>()
-                .eq(TransactionMessage::getId, id)
+            new LambdaUpdateWrapper<TransactionMessage>().eq(TransactionMessage::getId, id)
                 .set(TransactionMessage::getStatus, MessageStatus.SENT.getValue());
         
         transactionMessageMapper.update(null, updateWrapper);
@@ -223,6 +219,7 @@ public class TransactionMessageService {
             TransactionMessage message = transactionMessageMapper.selectById(id);
             
             if (message == null) {
+                log.warn("消息不存在, 从Redis清理, ID: {}", messageId);
                 cleanupMessage(messageId);
                 return;
             }
@@ -246,7 +243,7 @@ public class TransactionMessageService {
                 transactionMessageMapper.update(null, updateWrapper);
                 
                 long nextRetryScore = nextRetryTime
-                    .atZone(java.time.ZoneId.systemDefault())
+                    .atZone(ZoneId.systemDefault())
                     .toInstant()
                     .toEpochMilli();
                 
@@ -256,8 +253,7 @@ public class TransactionMessageService {
                     String.valueOf(nextRetryScore)
                 );
                 
-                log.warn("消息发送失败，将重试，messageId: {}, 重试次数: {}", 
-                    message.getMessageId(), retryCount);
+                log.warn("消息发送失败, 将重试, messageId: {}, 重试次数: {}", message.getMessageId(), retryCount);
             }
         } catch (Exception e) {
             log.error("处理发送失败异常，messageId: {}", messageId, e);
@@ -296,31 +292,26 @@ public class TransactionMessageService {
         int cleanedCount = 0;
         for (TransactionMessage message : messages) {
             if (isMessageCompleted(message.getStatus())) {
-                stringRedisTemplate.opsForZSet().remove(
-                    PENDING_QUEUE_KEY, 
-                    message.getId().toString()
-                );
+                stringRedisTemplate.opsForZSet().remove(PENDING_QUEUE_KEY, message.getId().toString());
                 cleanedCount++;
                 log.debug("清理已完成消息: ID={}", message.getId());
             }
         }
         
-        log.info("对账完成，清理 {} 条已完成消息", cleanedCount);
+        log.info("对账完成, 清理 {} 条已完成消息", cleanedCount);
     }
 
     @Scheduled(fixedDelay = 600000)
     public void recoverStuckMessages() {
         log.info("检查卡住的消息");
+        Set<String> pendingIds = stringRedisTemplate.opsForZSet().range(PENDING_QUEUE_KEY, 0, -1);
         
-        Set<String> allPendingIds = stringRedisTemplate.opsForZSet()
-            .range(PENDING_QUEUE_KEY, 0, -1);
-        
-        if (allPendingIds == null || allPendingIds.isEmpty()) {
+        if (pendingIds == null || pendingIds.isEmpty()) {
             return;
         }
 
         int recoveredCount = 0;
-        for (String messageId : allPendingIds) {
+        for (String messageId : pendingIds) {
             String lockKey = LOCK_KEY_PREFIX + messageId;
             Boolean exists = stringRedisTemplate.hasKey(lockKey);
             

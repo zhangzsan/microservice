@@ -3,6 +3,9 @@ package com.example.storage.entity;
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
+/**
+ * 库存记录表
+ */
 @Data
 @TableName("t_storage")
 public class Storage {

@@ -20,7 +20,6 @@ public class OrderController {
      */
     @PostMapping("/create")
     public Result<?> createOrder(@RequestBody OrderCreateRequest request) {
-        log.info("创建订单, 请求参数: {}", request);
         return Result.success(orderService.createOrder(request));
     }
 

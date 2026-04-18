@@ -22,7 +22,7 @@ public class PaymentController {
 
     @PostMapping("/add")
     public Result<?> insertPayment(@RequestBody PaymentRequest request) {
-        log.info("开始处理支付订单: {}", request);
+        log.info("插入支付记录相关的: {}", request);
         paymentService.insertPayment(request);
         return Result.success();
     }

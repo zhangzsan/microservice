@@ -12,7 +12,6 @@ import com.example.order.dto.OrderDTO;
 import com.example.order.entity.Order;
 import com.example.order.entity.TransactionMessage;
 import com.example.order.feign.AccountFeignClient;
-import com.example.order.feign.PaymentFeignClient;
 import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,6 +20,7 @@ import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +61,9 @@ public class OrderService {
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     /**
      *
      时间线(同一用户快速点击2次)：
@@ -90,15 +93,15 @@ public class OrderService {
         storageRequest.setOrderNo(orderNo);
         /*
          * 库存服务宕机或响应慢：
-         * ├─ Feign默认超时时间: 60秒
-         * ├─ 100个请求同时调用 → 100个线程阻塞60秒
+         * ├─ Feign默认超时时间:60秒
+         * ├─ 100个请求同时调用→ 100个线程阻塞60秒
          * ├─ 线程池耗尽
          * ├─ 新请求无法处理
          * └─ 雪崩效应 ❌
          */
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
-            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
+            boolean restored = storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
             throw new BusinessException(storageResult.getMessage());
         }
 
@@ -121,13 +124,13 @@ public class OrderService {
             log.error("订单创建失败, 订单号: {}", orderNo, e);
             storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
             rollbackStorageDeduct(orderNo, request.getProductId(), request.getQuantity());
-            throw new RuntimeException("创建订单失败,订单号:" + orderNo);
+            throw new BusinessException("创建订单失败,订单号:" + orderNo);
         }
     }
 
     public Result<?> handleCreateOrderBlock(OrderCreateRequest request, BlockException ex) {
-        log.warn("创建订单触发限流，用户ID: {}", request.getUserId());
-        return Result.error("系统繁忙，请稍后重试");
+        log.warn("创建订单触发限流, 用户ID: {}", request.getUserId());
+        return Result.error("系统繁忙, 请稍后重试");
     }
 
     private void sendPointsMessage(Order order) {
@@ -138,9 +141,7 @@ public class OrderService {
             pointsMessage.setPoints(order.getAmount().intValue());
 
             rocketMQTemplate.sendMessageInTransaction(
-                "points-tx-topic",
-                MessageBuilder.withPayload(pointsMessage)
-                    .setHeader("order_no", order.getOrderNo()).build(),
+                "points-tx-topic", MessageBuilder.withPayload(pointsMessage).setHeader("order_no", order.getOrderNo()).build(),
                 order.getOrderNo()
             );
             
@@ -180,7 +181,7 @@ public class OrderService {
             message.setRetryCount(0);
             message.setMaxRetryCount(3);
             message.setNextRetryTime(LocalDateTime.now());
-            message.setErrorMessage("MQ发送失败，降级保存");
+            message.setErrorMessage("MQ发送失败,降级保存");
             transactionMessageService.saveMessage(message);
             log.warn("消息已保存到数据库待补偿，订单号: {}, topic: {}", orderNo, topic);
         } catch (Exception ex) {
@@ -189,7 +190,15 @@ public class OrderService {
     }
 
     private String generateOrderNo() {
-        return "ORD" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 8);
+        String dateStr = LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String key = "order:no:gen:" + dateStr;
+        // 利用Redis原子自增生成序列号,设置过期时间为2天防止键堆积
+        Long seq = stringRedisTemplate.opsForValue().increment(key);
+        if (seq != null && seq == 1) {
+            stringRedisTemplate.expire(key, 2, TimeUnit.DAYS);
+        }
+        // 格式：ORD2026041800000001
+        return String.format("ORD%s%08d", dateStr, seq);
     }
 
     private OrderDTO convertToDTO(Order order) {
@@ -214,10 +223,7 @@ public class OrderService {
     /**
      * 调用支付订单,控制重复提交的逻辑
      */
-    @SentinelResource(
-            value = "pay-order",
-            blockHandler = "handlePayOrderBlock"
-    )
+    @SentinelResource(value = "pay-order", blockHandler = "handlePayOrderBlock")
     @Transactional(rollbackFor = Exception.class)
     public Result<?> payOrder(String orderNo) {
         String lockKey = "lock:pay:" + orderNo;
@@ -242,37 +248,35 @@ public class OrderService {
 
     public Result<?> handlePayOrderBlock(String orderNo, BlockException ex) {
         log.warn("支付订单触发限流，订单号: {}", orderNo);
-        return Result.error("系统繁忙，请稍后重试");
+        return Result.error("系统繁忙, 请稍后重试");
     }
 
     public Result<?> doPayOrder(String orderNo) {
         log.info("开始调用支付服务,订单号: {}", orderNo);
-        
         Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
-
         if (order == null) {
             log.error("订单不存在, 当前订单号: {}", orderNo);
-            throw new BusinessException("提交的订单不存在");
+            throw new BusinessException("提交的订单不存在,请检查提交的订单号是否正确");
         }
         
         if (order.getStatus() == OrderStatus.PAID.getValue()) {
             log.info("订单已支付, 请勿重复提交,订单号: {}", orderNo);
-            return Result.success("订单已支付");
+            return Result.success("订单已支付,请勿重复支付");
         }
         
         if (order.getStatus() == OrderStatus.CANCELLED.getValue()) {
             log.warn("订单已取消, 订单号: {}", orderNo);
-            throw new BusinessException("订单已取消，无法支付");
+            throw new BusinessException("订单已取消, 无法支付");
         }
         
         if (order.getStatus() == OrderStatus.TIMEOUT.getValue()) {
             log.warn("订单已超时, 订单号: {}", orderNo);
-            throw new BusinessException("订单已超时，无法支付");
+            throw new BusinessException("订单已超时, 无法支付");
         }
         
         if (order.getStatus() != OrderStatus.PENDING.getValue()) {
             log.error("订单状态异常, 订单号: {}, 状态: {}", orderNo, order.getStatus());
-            throw new BusinessException("订单状态异常，无法支付");
+            throw new BusinessException("订单状态异常, 无法支付");
         }
 
         UpdateWrapper<Order> update = new UpdateWrapper<>();
@@ -280,12 +284,11 @@ public class OrderService {
 
         int updated = orderMapper.update(null, update);
         if (updated == 0) {
-            log.warn("订单状态更新失败，可能已被超时处理，订单号: {}", orderNo);
-            throw new BusinessException("订单状态已变更，支付失败");
+            log.warn("订单状态更新失败，可能已被超时处理, 订单号: {}, 请检查当前订单状态", orderNo);
+            throw new BusinessException("订单状态已变更, 支付失败");
         }
 
         try {
-            //扣款模拟支付成功的逻辑
             AccountDeductRequest request = new AccountDeductRequest();
             request.setOrderNo(orderNo);
             request.setUserId(order.getUserId());
@@ -309,11 +312,9 @@ public class OrderService {
                 rollbackOrderStatus(orderNo);
                 throw new BusinessException("支付记录创建失败: " + result.getMessage());
             }
-
             log.info("支付成功, 订单号: {}", orderNo);
             sendPointsMessage(order);
             return Result.success("支付成功");
-            
         } catch (Exception e) {
             log.error("支付过程异常，回滚订单状态，订单号: {}", orderNo, e);
             rollbackOrderStatus(orderNo);
@@ -325,8 +326,13 @@ public class OrderService {
     /**
      *  库存回滚失败操作
      */
-    private void rollbackStorageDeduct(String orderNo,Long productId,Integer quantity) {
+    private void rollbackStorageDeduct(String orderNo, Long productId, Integer quantity) {
         try {
+            Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+            if (currentOrder != null && currentOrder.getStatus() == OrderStatus.PAID.getValue()) {
+                log.warn("订单已支付, 中止库存回滚，订单号: {}", orderNo);
+                return;
+            }
             StorageRestoreRequest restoreRequest = new StorageRestoreRequest();
             restoreRequest.setOrderNo(orderNo);
             restoreRequest.setProductId(productId);
@@ -343,7 +349,7 @@ public class OrderService {
         }
     }
     /**
-     * 订单支付失败，回滚订单状态
+     * 订单支付失败, 回滚订单状态
      */
     private void rollbackOrderStatus(String orderNo) {
         try {
@@ -355,10 +361,10 @@ public class OrderService {
             if (rolledBack > 0) {
                 log.info("订单状态回滚成功，订单号: {}", orderNo);
             } else {
-                log.warn("订单状态回滚失败(可能已被超时处理)，订单号: {}", orderNo);
+                log.warn("订单状态回滚失败(可能已被超时处理), 订单号: {}", orderNo);
             }
         } catch (Exception e) {
-            log.error("订单状态回滚异常，订单号: {}", orderNo, e);
+            log.error("订单状态回滚异常, 订单号: {}", orderNo, e);
         }
     }
 
@@ -374,12 +380,12 @@ public class OrderService {
             
             Result<?> restoreResult = accountFeignClient.restore(restoreRequest);
             if (restoreResult.isSuccess()) {
-                log.info("账户扣款回滚成功，订单号: {}", orderNo);
+                log.info("账户扣款回滚成功, 订单号: {}", orderNo);
             } else {
-                log.error("账户扣款回滚失败，需要人工介入，订单号: {}, 原因: {}", orderNo, restoreResult.getMessage());
+                log.error("账户扣款回滚失败, 需要人工介入, 订单号: {}, 原因: {}", orderNo, restoreResult.getMessage());
             }
         } catch (Exception e) {
-            log.error("账户扣款回滚异常，需要人工介入, 订单号: {}", orderNo, e);
+            log.error("账户扣款回滚异常, 需要人工介入, 订单号: {}", orderNo, e);
         }
     }
 }

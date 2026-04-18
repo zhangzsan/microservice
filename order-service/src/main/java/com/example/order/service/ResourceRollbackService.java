@@ -4,11 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.common.constant.OperationStatus;
 import com.example.common.constant.OperationType;
-import com.example.common.dto.AccountRestoreRequest;
 import com.example.common.dto.OrderTimeoutMessage;
 import com.example.common.dto.StorageRestoreRequest;
+import com.example.common.exception.BusinessException;
 import com.example.order.entity.OrderOperationLog;
-import com.example.order.feign.AccountFeignClient;
 import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderOperationLogMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * 优化 ResourceRollbackService - 异步批量处理
+ * 恢复库存的操作
  */
 @Service
 @Slf4j
@@ -35,9 +35,6 @@ public class ResourceRollbackService {
 
     @Autowired
     private StorageFeignClient storageFeignClient;
-
-    @Autowired
-    private AccountFeignClient accountFeignClient;
 
     @Autowired
     private StorageCacheService storageCacheService;
@@ -55,9 +52,9 @@ public class ResourceRollbackService {
 
             if (existLog != null) {
                 if (existLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
-                    log.warn("回滚任务已成功，无需重复创建，订单号: {}", message.getOrderNo());
+                    log.warn("回滚任务已成功, 无需重复创建, 订单号: {}", message.getOrderNo());
                 } else {
-                    log.warn("回滚任务已存在且未完成，订单号: {}, 状态: {}", message.getOrderNo(), existLog.getOperationStatus());
+                    log.warn("回滚任务已存在且未完成, 订单号: {}, 状态: {}", message.getOrderNo(), existLog.getOperationStatus());
                 }
                 return;
             }
@@ -78,18 +75,18 @@ public class ResourceRollbackService {
             log.warn("回滚任务已存在(唯一索引冲突), 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
             log.error("创建回滚任务失败, 订单号: {}", message.getOrderNo(), e);
-            throw new RuntimeException("创建回滚任务失败", e);
+            throw new BusinessException("创建回滚任务失败:" +  e);
         }
     }
 
     @Async("rollbackExecutor")
-    public CompletableFuture<Void> createRollbackTaskAsync(OrderTimeoutMessage message) {
+    public void createRollbackTaskAsync(OrderTimeoutMessage message) {
         try {
             createRollbackTask(message);
-            return CompletableFuture.completedFuture(null);
+            CompletableFuture.completedFuture(null);
         } catch (Exception e) {
             log.error("异步创建回滚任务失败，订单号: {}", message.getOrderNo(), e);
-            return CompletableFuture.failedFuture(e);
+            CompletableFuture.failedFuture(e);
         }
     }
 
@@ -117,8 +114,7 @@ public class ResourceRollbackService {
             rollbackStorage(message);
             rollbackRedisStock(message);
             updateLogStatus(logId, OperationStatus.SUCCESS, null);
-            log.info("资源回滚成功，订单号: {}", message.getOrderNo());
-
+            log.info("资源回滚成功, 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
             int retryCount = operationLog.getRetryCount() + 1;
             LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(retryCount * 5L);
@@ -133,8 +129,7 @@ public class ResourceRollbackService {
 
             operationLogMapper.update(null, updateWrapper);
 
-            log.error("资源回滚失败，将重试，订单号: {}, 重试次数: {}", 
-                operationLog.getOrderNo(), retryCount, e);
+            log.error("资源回滚失败，将重试，订单号: {}, 重试次数: {}", operationLog.getOrderNo(), retryCount, e);
         }
     }
 
@@ -164,21 +159,6 @@ public class ResourceRollbackService {
         }
     }
 
-    private void rollbackAccount(OrderTimeoutMessage message) {
-        AccountRestoreRequest request = new AccountRestoreRequest();
-        request.setUserId(message.getUserId());
-        request.setAmount(message.getAmount());
-        request.setOrderNo(message.getOrderNo());
-        
-        try {
-            accountFeignClient.restore(request);
-            log.info("余额回滚成功，订单号: {}", message.getOrderNo());
-        } catch (Exception e) {
-            log.error("余额回滚失败，订单号: {}", message.getOrderNo(), e);
-            throw e;
-        }
-    }
-
     private void rollbackRedisStock(OrderTimeoutMessage message) {
         try {
             storageCacheService.restoreStockWithRedis(message.getProductId(), message.getQuantity(),message.getOrderNo());
@@ -192,8 +172,7 @@ public class ResourceRollbackService {
     private void updateLogStatus(Long logId, OperationStatus status, String errorMessage) {
         LambdaUpdateWrapper<OrderOperationLog> updateWrapper = 
             new LambdaUpdateWrapper<OrderOperationLog>()
-                .eq(OrderOperationLog::getId, logId)
-                .set(OrderOperationLog::getOperationStatus, status.getValue());
+                .eq(OrderOperationLog::getId, logId).set(OrderOperationLog::getOperationStatus, status.getValue());
 
         if (errorMessage != null) {
             updateWrapper.set(OrderOperationLog::getErrorMessage, errorMessage);

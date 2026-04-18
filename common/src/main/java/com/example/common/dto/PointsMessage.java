@@ -1,6 +1,5 @@
 package com.example.common.dto;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 
 @Data
