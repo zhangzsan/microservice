@@ -50,14 +50,7 @@ public class StorageService {
         try {
             log.info("库存服务开始恢复库存, 商品ID: {}, 数量: {}, 订单号: {}", request.getProductId(), request.getQuantity(), request.getOrderNo());
 
-            UpdateWrapper<Storage> updateWrapper = new UpdateWrapper<>();
-            updateWrapper.eq("product_id", request.getProductId()).ge("used", request.getQuantity());
-
-            Storage updateStorage = new Storage();
-            updateStorage.setUsed(-request.getQuantity());
-            updateStorage.setResidue(request.getQuantity());
-
-            int updateCount = storageMapper.update(updateStorage, updateWrapper);
+            int updateCount = storageMapper.restore(request.getProductId(), request.getQuantity());
             if (updateCount == 0) {
                 log.error("库存恢复失败, 可能已恢复过，订单号: {}", request.getOrderNo());
                 throw new BusinessException("库存恢复失败");

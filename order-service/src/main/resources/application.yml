@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: 8086
 
 spring:
   application:
@@ -9,10 +9,30 @@ spring:
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 50          # 最大连接数
+      minimum-idle: 10               # 最小空闲连接
+      connection-timeout: 30000      # 连接超时30秒
+      idle-timeout: 600000           # 空闲超时10分钟
+      max-lifetime: 1800000          # 最大生命周期30分钟
+      leak-detection-threshold: 60000 # 连接泄漏检测60秒
   cloud:
     nacos:
       discovery:
         server-addr: localhost:8848
+    sentinel:
+      transport:
+        dashboard: localhost:8090  # Sentinel Dashboard 地址
+        port: 8719
+      datasource:
+        ds1:
+          nacos:
+            server-addr: localhost:8848
+            data-id: ${spring.application.name}-flow-rules
+            group-id: DEFAULT_GROUP
+            rule-type: flow
+            data-type: json
+
 rocketmq:
   name-server: 127.0.0.1:9876
   producer:
@@ -30,12 +50,24 @@ feign:
   client:
     config:
       default:
-        loggerLevel: FULL
+        connectTimeout: 3000    # 连接超时3秒
+        readTimeout: 5000       # 读取超时5秒
   compression:
     request:
-      enabled: false
+      enabled: true             # 启用压缩
     response:
-      enabled: false
+      enabled: true
+  circuitbreaker:               # 熔断器
+    enabled: true
+
+resilience4j:
+  circuitbreaker:               #熔断器
+    instances:
+      storageFeignClient:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10000
+        permittedNumberOfCallsInHalfOpenState: 5
 
 logging:
   level:
@@ -46,3 +78,10 @@ mybatis-plus:
   type-aliases-package: com.example.order.entity
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+## 高并发下：调增数据库连接池的参数
+#├─ 1000个并发请求
+#├─ 每个请求需要3-5个数据库操作
+#├─ 默认HikariCP连接池大小：10
+#├─ 连接等待超时
+#└─ 大量请求失败 ❌

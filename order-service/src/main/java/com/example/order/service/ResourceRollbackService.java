@@ -114,10 +114,8 @@ public class ResourceRollbackService {
 
         try {
             OrderTimeoutMessage message = objectMapper.readValue(operationLog.getRequestData(), OrderTimeoutMessage.class);
-
             rollbackStorage(message);
             rollbackRedisStock(message);
-
             updateLogStatus(logId, OperationStatus.SUCCESS, null);
             log.info("资源回滚成功，订单号: {}", message.getOrderNo());
 
@@ -146,7 +144,7 @@ public class ResourceRollbackService {
             try {
                 executeRollback(logId);
             } catch (Exception e) {
-                log.error("批量回滚中单个任务失败，ID: {}", logId, e);
+                log.error("批量回滚中单个任务失败,ID: {}", logId, e);
             }
         }
         log.info("批量回滚任务完成，数量: {}", logIds.size());

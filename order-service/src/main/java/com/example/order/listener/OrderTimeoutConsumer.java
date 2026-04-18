@@ -1,5 +1,7 @@
 package com.example.order.listener;
 
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.common.constant.OrderStatus;
@@ -12,13 +14,15 @@ import org.apache.rocketmq.spring.annotation.ConsumeMode;
 import org.apache.rocketmq.spring.annotation.MessageModel;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
 /*
  * 1️⃣ 数据库层面; 唯一索引 + CAS乐观锁
- * 2️⃣ 应用层面： 分布式锁 + 状态机校验
- * 3️⃣ 消息层面：延迟消息 + 幂等性
+ * 2️⃣ 应用层面: 分布式锁 + 状态机校验
+ * 3️⃣ 消息层面: 延迟消息 + 幂等性
  * 4️⃣ 补偿层面: 定时任务 + 人工介入
  */
 
@@ -49,6 +53,10 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     @Autowired
     private ResourceRollbackService rollbackService;
 
+    @Autowired
+    private RocketMQTemplate rocketMQTemplate;
+
+    @SentinelResource(value = "timeout-process", blockHandler = "handleBlockException")
     @Override
     public void onMessage(OrderTimeoutMessage message) {
         String orderNo = message.getOrderNo();
@@ -66,8 +74,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
                 rollbackService.createRollbackTaskAsync(message);
                 log.info("订单超时处理完成, 订单号: {}", orderNo);
             } else {
-                Order currentOrder = orderMapper.selectOne(
-                        new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+                Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
                 if (currentOrder == null) {
                     log.warn("订单不存在, 跳过超时处理, 订单号: {}", orderNo);
                     return;
@@ -85,6 +92,21 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
         } catch (Exception e) {
             log.error("处理订单超时消息异常, 订单号: {}", orderNo, e);
             throw new RuntimeException("处理超时消息失败", e);
+        }
+    }
+
+    public void handleBlockException(OrderTimeoutMessage message, BlockException ex) {
+        log.warn("触发限流，延迟重试，订单号: {}", message.getOrderNo());
+        try {
+            rocketMQTemplate.syncSend(
+                    "order-timeout-retry-topic",
+                    MessageBuilder.withPayload(message).build(),
+                    3000,
+                    9
+            );
+            log.info("消息已发送到重试队列，订单号: {}", message.getOrderNo());
+        } catch (Exception e) {
+            log.error("发送重试消息失败，订单号: {}", message.getOrderNo(), e);
         }
     }
 }

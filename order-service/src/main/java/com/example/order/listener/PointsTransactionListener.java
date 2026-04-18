@@ -20,7 +20,7 @@ public class PointsTransactionListener implements RocketMQLocalTransactionListen
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
         String orderNo = (String) arg;
-        
+        log.info("本地事务执行开始, 订单号: {}", orderNo);
         try {
             Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (order != null) {
@@ -39,7 +39,7 @@ public class PointsTransactionListener implements RocketMQLocalTransactionListen
     @Override
     public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
         String orderNo = msg.getHeaders().get("order_no", String.class);
-        
+        log.info("事务回查开始, 订单号: {}", orderNo);
         try {
             Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (order != null) {

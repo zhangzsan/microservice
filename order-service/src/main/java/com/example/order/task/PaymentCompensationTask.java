@@ -196,7 +196,7 @@ public class PaymentCompensationTask {
 
     private void sendPointsMessage(Order order) {
         try {
-            PointsMessage pointsMessage = new com.example.common.dto.PointsMessage();
+            PointsMessage pointsMessage = new PointsMessage();
             pointsMessage.setOrderNo(order.getOrderNo());
             pointsMessage.setUserId(order.getUserId());
             //TODO

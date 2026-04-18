@@ -15,6 +15,6 @@ public class StorageFeignFallback implements StorageFeignClient {
 
     @Override
     public Result<?> restore(StorageRestoreRequest request) {
-        Result.error("库存服务异常");
+        return Result.error("库存服务异常");
     }
 }

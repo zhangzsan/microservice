@@ -1,12 +1,15 @@
-package com.example.payment.controller;
+package com.example.order.controller;
 
 
 import com.example.common.dto.PaymentRequest;
 import com.example.common.result.Result;
-import com.example.payment.service.PaymentService;
+import com.example.order.service.PaymentService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/payment")

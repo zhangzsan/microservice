@@ -35,7 +35,7 @@ public class StockInitRunner implements CommandLineRunner {
         // 2. 转成 key-value 结构
         Map<String, Integer> stockMap = storages.stream()
                 .collect(Collectors.toMap(
-                        stock -> "stock:product:" + stock.getProductId(), Storage::getTotal // 库存数量
+                        stock -> "stock:product:" + stock.getProductId(), stock -> stock.getTotal() - stock.getUsed() // 库存数量
                 ));
 
         // 3. 批量存入 Redis

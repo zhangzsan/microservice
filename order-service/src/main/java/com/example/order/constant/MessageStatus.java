@@ -2,6 +2,9 @@ package com.example.order.constant;
 
 import lombok.Getter;
 
+/**
+ * 本地事务表,结合RocketMQ的事务消息,实现最终的一致性
+ */
 @Getter
 public enum MessageStatus {
     

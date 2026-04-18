@@ -83,7 +83,7 @@ public class StorageCacheService {
             log.info("Redis库存恢复成功，商品ID: {}, 恢复后库存: {}", productId, newStock);
         } catch (Exception e) {
             redisTemplate.delete(idempotentKey);
-            log.error("Redis库存恢复失败，商品ID: {}", productId, e);
+            log.error("Redis库存恢复失败, 商品ID: {}", productId, e);
             throw e;
         }
     }

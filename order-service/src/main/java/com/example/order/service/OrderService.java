@@ -1,5 +1,7 @@
 package com.example.order.service;
 
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.common.constant.OrderStatus;
@@ -8,10 +10,12 @@ import com.example.common.exception.BusinessException;
 import com.example.common.result.Result;
 import com.example.order.dto.OrderDTO;
 import com.example.order.entity.Order;
+import com.example.order.entity.TransactionMessage;
 import com.example.order.feign.AccountFeignClient;
 import com.example.order.feign.PaymentFeignClient;
 import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
@@ -43,7 +47,7 @@ public class OrderService {
     private StorageCacheService storageCacheService;
 
     @Autowired
-    private PaymentFeignClient paymentFeignClient;
+    private PaymentService paymentService;
 
     @Autowired
     private RedissonClient redissonClient;
@@ -52,11 +56,23 @@ public class OrderService {
     private TransactionMessageService transactionMessageService;
 
     @Autowired
-    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private ObjectMapper objectMapper;
 
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
 
+    /**
+     *
+     时间线(同一用户快速点击2次)：
+     T1: 请求A - Redis扣减库存成功（剩余99）
+     T2: 请求B - Redis扣减库存成功（剩余98）
+     T3: 请求A - Feign调用库存服务（成功）
+     T4: 请求B - Feign调用库存服务（成功）
+     T5: 请求A - 创建订单A ✅
+     T6: 请求B - 创建订单B ✅
+     结果：用户下了2单, 但可能只想要1单！
+     */
+    @SentinelResource(value = "create-order", blockHandler = "handleCreateOrderBlock")
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
         log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
@@ -72,6 +88,14 @@ public class OrderService {
         storageRequest.setProductId(request.getProductId());
         storageRequest.setQuantity(request.getQuantity());
         storageRequest.setOrderNo(orderNo);
+        /*
+         * 库存服务宕机或响应慢：
+         * ├─ Feign默认超时时间: 60秒
+         * ├─ 100个请求同时调用 → 100个线程阻塞60秒
+         * ├─ 线程池耗尽
+         * ├─ 新请求无法处理
+         * └─ 雪崩效应 ❌
+         */
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
             storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
@@ -88,10 +112,9 @@ public class OrderService {
             order.setStatus(OrderStatus.PENDING.getValue());
             order.setCreatedTime(LocalDateTime.now());
             order.setUpdatedTime(order.getCreatedTime());
-            orderMapper.insert(order);
-            
             sendOrderTimeoutMessage(order);
-            
+            orderMapper.insert(order);
+
             log.info("订单创建成功, 订单号: {}", orderNo);
             return convertToDTO(order);
         } catch (Exception e) {
@@ -102,6 +125,10 @@ public class OrderService {
         }
     }
 
+    public Result<?> handleCreateOrderBlock(OrderCreateRequest request, BlockException ex) {
+        log.warn("创建订单触发限流，用户ID: {}", request.getUserId());
+        return Result.error("系统繁忙，请稍后重试");
+    }
 
     private void sendPointsMessage(Order order) {
         try {
@@ -113,14 +140,13 @@ public class OrderService {
             rocketMQTemplate.sendMessageInTransaction(
                 "points-tx-topic",
                 MessageBuilder.withPayload(pointsMessage)
-                    .setHeader("order_no", order.getOrderNo())
-                    .build(),
+                    .setHeader("order_no", order.getOrderNo()).build(),
                 order.getOrderNo()
             );
             
             log.info("积分事务消息已发送，订单号: {}", order.getOrderNo());
         } catch (Exception e) {
-            log.error("发送积分事务消息失败，降级保存到数据库，订单号: {}", order.getOrderNo(), e);
+            log.error("发送积分事务消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
             saveFailedMessageToDb(order.getOrderNo(), "points-tx-topic", "points", 
                 new PointsMessage(order.getUserId(), order.getOrderNo(), order.getAmount().intValue()));
         }
@@ -134,12 +160,7 @@ public class OrderService {
         message.setUserId(order.getUserId());
         message.setAmount(order.getAmount());
         try {
-            rocketMQTemplate.syncSend(
-                "order-timeout-topic",
-                MessageBuilder.withPayload(message).build(),
-                3000, 16
-            );
-            
+            rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(message).build(), 3000, 16);
             log.info("订单超时延迟消息已发送，订单号: {}", order.getOrderNo());
         } catch (Exception e) {
             log.error("发送订单超时消息失败，订单号: {}", order.getOrderNo(), e);
@@ -150,7 +171,7 @@ public class OrderService {
 
     private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
         try {
-            com.example.order.entity.TransactionMessage message = new com.example.order.entity.TransactionMessage();
+            TransactionMessage message = new TransactionMessage();
             message.setMessageId(java.util.UUID.randomUUID().toString().replace("-", ""));
             message.setTopic(topic);
             message.setTag(tag);
@@ -163,13 +184,10 @@ public class OrderService {
             transactionMessageService.saveMessage(message);
             log.warn("消息已保存到数据库待补偿，订单号: {}, topic: {}", orderNo, topic);
         } catch (Exception ex) {
-            log.error("保存失败消息到数据库也失败，需人工介入，订单号: {}", orderNo, ex);
+            log.error("保存失败消息到数据库也失败, 需人工介入，订单号: {}", orderNo, ex);
         }
     }
 
-    /**
-     * 生成订单号
-     */
     private String generateOrderNo() {
         return "ORD" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 8);
     }
@@ -185,9 +203,6 @@ public class OrderService {
         return dto;
     }
 
-    /**
-     * 根据订单号获取订的状态
-     */
     public Object queryOrderStatus(String orderNo) {
         Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
         if (order == null) {
@@ -199,6 +214,10 @@ public class OrderService {
     /**
      * 调用支付订单,控制重复提交的逻辑
      */
+    @SentinelResource(
+            value = "pay-order",
+            blockHandler = "handlePayOrderBlock"
+    )
     @Transactional(rollbackFor = Exception.class)
     public Result<?> payOrder(String orderNo) {
         String lockKey = "lock:pay:" + orderNo;
@@ -221,7 +240,11 @@ public class OrderService {
         }
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    public Result<?> handlePayOrderBlock(String orderNo, BlockException ex) {
+        log.warn("支付订单触发限流，订单号: {}", orderNo);
+        return Result.error("系统繁忙，请稍后重试");
+    }
+
     public Result<?> doPayOrder(String orderNo) {
         log.info("开始调用支付服务,订单号: {}", orderNo);
         
@@ -279,7 +302,7 @@ public class OrderService {
             paymentRequest.setTransactionId("TXN" + System.currentTimeMillis() + orderNo);
             paymentRequest.setPayAmount(order.getAmount());
             paymentRequest.setPayChannel(1);
-            Result<?> result = paymentFeignClient.insertPayment(paymentRequest);
+            Result<?> result = paymentService.insertPayment(paymentRequest);
             if (!result.isSuccess()) {
                 log.error("添加支付记录失败, 订单号: {}, 原因: {}", orderNo, result.getMessage());
                 rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());

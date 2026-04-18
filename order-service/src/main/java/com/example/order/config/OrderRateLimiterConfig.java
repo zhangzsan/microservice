@@ -1,28 +1,31 @@
 
 package com.example.order.config;
 
-
-import io.github.resilience4j.ratelimiter.RateLimiter;
-import io.github.resilience4j.ratelimiter.RateLimiterConfig;
+import com.alibaba.csp.sentinel.annotation.aspectj.SentinelResourceAspect;
+import com.alibaba.csp.sentinel.slots.block.RuleConstant;
+import com.alibaba.csp.sentinel.slots.block.flow.FlowRule;
+import com.alibaba.csp.sentinel.slots.block.flow.FlowRuleManager;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.Duration;
+import javax.annotation.PostConstruct;
 
 /**
- * 添加限流保护(防止雪崩)
+ * Sentinel 限流配置
+ * 防止雪崩,保护系统稳定性,处理流量控制问题
  */
 @Configuration
+@Slf4j
 public class OrderRateLimiterConfig {
 
     @Bean
-    public RateLimiter timeoutProcessRateLimiter() {
-        RateLimiterConfig config = RateLimiterConfig.custom()
-            .limitRefreshPeriod(Duration.ofSeconds(1))
-            .limitForPeriod(50)
-            .timeoutDuration(Duration.ofMillis(100))
-            .build();
+    public SentinelResourceAspect sentinelResourceAspect() {
+        return new SentinelResourceAspect();
+    }
 
-        return RateLimiter.of("timeout-process", config);
+    @PostConstruct
+    public void initFlowRules() {
+        System.setProperty("project.name", "order-service");
     }
 }

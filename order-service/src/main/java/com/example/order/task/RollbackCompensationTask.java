@@ -28,7 +28,6 @@ public class RollbackCompensationTask {
     @Scheduled(fixedDelay = 60000)
     public void compensateFailedRollbacks() {
         log.info("开始执行回滚补偿任务");
-
         List<OrderOperationLog> failedLogs = operationLogMapper.selectList(
             new LambdaQueryWrapper<OrderOperationLog>()
                 .in(OrderOperationLog::getOperationStatus, 

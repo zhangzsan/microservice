@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 
+/**
+ * 返回创建订单后的订单信息
+ */
 @Data
 public class OrderDTO {
     private String orderNo;

@@ -20,20 +20,15 @@ public class AsyncConfig {
     @Bean("rollbackExecutor")
     public Executor rollbackExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        
         executor.setCorePoolSize(10);
         executor.setMaxPoolSize(20);
         executor.setQueueCapacity(200);
         executor.setKeepAliveSeconds(60);
         executor.setThreadNamePrefix("rollback-async-");
-        
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
-        
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
-        
         executor.initialize();
-        
         log.info("回滚异步线程池初始化完成");
         return executor;
     }

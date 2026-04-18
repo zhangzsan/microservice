@@ -15,18 +15,27 @@ public class OrderController {
     @Autowired
     private OrderService orderService;
 
+    /**
+     *  创建幂等性订单尚未控制
+     */
     @PostMapping("/create")
     public Result<?> createOrder(@RequestBody OrderCreateRequest request) {
         log.info("创建订单, 请求参数: {}", request);
         return Result.success(orderService.createOrder(request));
     }
 
+    /**
+     *  支付订单
+     */
     @PostMapping("/pay/{orderNo}")
     public Result<?> payOrder(@PathVariable String orderNo) {
         log.info("用户发起支付, 订单号: {}", orderNo);
         return orderService.payOrder(orderNo);
     }
 
+    /**
+     * 查询订单的状态
+     */
     @GetMapping("/status/{orderNo}")
     public Result<?> queryOrderStatus(@PathVariable String orderNo) {
         log.info("查询订单状态, 订单号: {}", orderNo);

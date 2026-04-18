@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 import java.time.LocalDateTime;
 
+/**
+ * 订单补偿事务表
+ */
 @Data
 @TableName("t_order_operation_log")
 public class OrderOperationLog {
