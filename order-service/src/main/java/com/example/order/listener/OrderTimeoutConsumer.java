@@ -7,7 +7,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.common.constant.OrderStatus;
 import com.example.common.dto.OrderTimeoutMessage;
 import com.example.order.entity.Order;
+import com.example.order.entity.OrderTimeoutMessageLog;
 import com.example.order.mapper.OrderMapper;
+import com.example.order.mapper.OrderTimeoutMessageLogMapper;
 import com.example.order.service.StockRollbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.ConsumeMode;
@@ -16,6 +18,7 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,41 +55,92 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
 
+    @Autowired
+    private OrderTimeoutMessageLogMapper messageLogMapper;
+
     @SentinelResource(value = "timeout-process", blockHandler = "handleBlockException")
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void onMessage(OrderTimeoutMessage message) {
         String orderNo = message.getOrderNo();
         log.info("接收到订单超时消息,订单号: {}", orderNo);
 
         try {
-            LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
-                    .eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
-
-            int updated = orderMapper.update(null, updateWrapper);
-            if (updated > 0) {
-                log.info("订单状态更新为超时成功, 异步创建回滚任务, 订单号: {}", orderNo);
+            // 1. 在事务中更新订单状态和记录消息
+            boolean shouldCreateRollback = processOrderTimeoutInTransaction(message);
+            
+            // 2. 事务提交后,异步创建回滚任务(避免@Async导致的事务问题)
+            if (shouldCreateRollback) {
                 rollbackService.createRollbackTask(message);
-                log.info("订单超时处理完成, 订单号: {}", orderNo);
-            } else {
-                Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
-                if (currentOrder == null) {
-                    log.warn("订单不存在, 订单号: {}", orderNo);
-                    return;
-                }
-                if (currentOrder.getStatus() == OrderStatus.PAID.getValue()) {
-                    log.warn("订单已支付, 无需处理超时逻辑, 订单号: {}", orderNo);
-                } else if (currentOrder.getStatus() == OrderStatus.TIMEOUT.getValue()) {
-                    log.debug("订单已超时, 无需重复处理, 订单号: {}", orderNo);
-                } else if (currentOrder.getStatus() == OrderStatus.CANCELLED.getValue()) {
-                    log.debug("订单已取消, 无需处理, 订单号: {}", orderNo);
-                } else {
-                    log.warn("订单状态异常或不存在, 订单号: {}, 当前状态: {}", orderNo, currentOrder.getStatus());
-                }
+                log.info("订单超时处理完成, 已异步创建回滚任务, 订单号: {}", orderNo);
             }
         } catch (Exception e) {
             log.error("处理订单超时消息异常, 订单号: {}", orderNo, e);
             throw new RuntimeException("处理超时消息失败", e);
+        }
+    }
+
+    /**
+     * 在事务中处理订单超时
+     * @return true-需要创建回滚任务, false-不需要
+     */
+    @Transactional(rollbackFor = Exception.class)
+    private boolean processOrderTimeoutInTransaction(OrderTimeoutMessage message) {
+        String orderNo = message.getOrderNo();
+        
+        // 1. 幂等性检查：记录消息消费状态（利用唯一索引防重）
+        if (!recordMessageIfNew(message)) {
+            log.warn("消息已处理，跳过重复消费. 订单号: {}", orderNo);
+            return false;
+        }
+
+        // 2. CAS更新订单状态
+        LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
+                .eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue())
+                .set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
+
+        int updated = orderMapper.update(null, updateWrapper);
+        if (updated > 0) {
+            log.info("订单状态更新为超时成功, 订单号: {}", orderNo);
+            return true;  // 需要创建回滚任务
+        } else {
+            // 查询当前订单状态,判断为何CAS失败
+            Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+            if (currentOrder == null) {
+                log.warn("订单不存在, 订单号: {}", orderNo);
+                return false;
+            }
+            if (currentOrder.getStatus() == OrderStatus.PAID.getValue()) {
+                log.warn("订单已支付, 无需处理超时逻辑, 订单号: {}", orderNo);
+            } else if (currentOrder.getStatus() == OrderStatus.TIMEOUT.getValue()) {
+                log.debug("订单已超时, 无需重复处理, 订单号: {}", orderNo);
+            } else if (currentOrder.getStatus() == OrderStatus.CANCELLED.getValue()) {
+                log.debug("订单已取消, 无需处理, 订单号: {}", orderNo);
+            } else {
+                log.warn("订单状态异常或不存在, 订单号: {}, 当前状态: {}", orderNo, currentOrder.getStatus());
+            }
+            return false;
+        }
+    }
+
+    /**
+     * 记录消息消费状态(幂等性保护）
+     * 利用数据库唯一索引防止重复消费
+     * @return true-新消息，false-重复消息
+     */
+    private boolean recordMessageIfNew(OrderTimeoutMessage message) {
+        try {
+            OrderTimeoutMessageLog log = new OrderTimeoutMessageLog();
+            log.setOrderNo(message.getOrderNo());
+            // 使用订单号作为messageId（因为一个订单只处理一次超时）
+            log.setMessageId(message.getOrderNo());
+            log.setProcessed(1);
+            
+            messageLogMapper.insert(log);
+            return true;
+            
+        } catch (DuplicateKeyException e) {
+            log.warn("消息已存在（唯一索引冲突），订单号: {}", message.getOrderNo());
+            return false;
         }
     }
 

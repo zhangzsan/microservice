@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,13 +41,32 @@ public class StockRollbackService {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /**
+     * 异步创建回滚任务
+     * 使用@Async避免阻塞MQ消费者线程,提升吞吐量
+     */
+    @Async
     @Transactional(rollbackFor = Exception.class)
     public void createRollbackTask(OrderTimeoutMessage message) {
+        createRollbackTaskInternal(message);
+    }
+
+    /**
+     * 同步创建回滚任务
+     * 用于补偿场景,确保任务一定被创建
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void createRollbackTaskSync(OrderTimeoutMessage message) {
+        createRollbackTaskInternal(message);
+    }
+
+    /**
+     * 内部方法: 创建回滚任务的核心逻辑
+     */
+    private void createRollbackTaskInternal(OrderTimeoutMessage message) {
         try {
-            OrderOperationLog existLog = operationLogMapper.selectOne(
-                new LambdaQueryWrapper<OrderOperationLog>()
-                    .eq(OrderOperationLog::getOrderNo, message.getOrderNo())
-                    .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
+            OrderOperationLog existLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>()
+                    .eq(OrderOperationLog::getOrderNo, message.getOrderNo()).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
 
             if (existLog != null) {
                 if (existLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
@@ -76,6 +96,11 @@ public class StockRollbackService {
         }
     }
 
+    /**
+     * 异步执行回滚任务
+     * 使用@Async避免阻塞调用方,提升并发处理能力
+     */
+    @Async
     @Transactional(rollbackFor = Exception.class)
     public void executeRollback(Long logId) {
         OrderOperationLog operationLog = operationLogMapper.selectById(logId);

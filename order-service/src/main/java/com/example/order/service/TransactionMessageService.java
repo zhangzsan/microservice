@@ -1,6 +1,7 @@
 package com.example.order.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.example.common.dto.OrderTimeoutMessage;
 import com.example.common.exception.BusinessException;
 import com.example.order.constant.MessageStatus;
 import com.example.order.entity.TransactionMessage;
@@ -17,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Collections;
@@ -160,11 +162,7 @@ public class TransactionMessageService {
             try {
                 Object body = objectMapper.readValue(message.getMessageBody(), Object.class);
                 
-                rocketMQTemplate.sendMessageInTransaction(
-                    message.getTopic(),
-                    MessageBuilder.withPayload(body).build(),
-                    extractOrderNo(message.getMessageBody())
-                );
+                rocketMQTemplate.sendMessageInTransaction(message.getTopic(), MessageBuilder.withPayload(body).build(), extractOrderNo(message.getMessageBody()));
                 
                 updateMessageStatus(message.getId());
                 log.info("事务消息发送成功, messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
@@ -172,11 +170,75 @@ public class TransactionMessageService {
                 log.error("发送事务消息失败，messageId: {}", message.getMessageId(), e);
                 throw new BusinessException("发送事务消息失败:" + e.getMessage());
             }
+        } else if ("order-timeout-topic".equals(message.getTopic())) {
+            // 超时消息: 计算剩余延迟时间,保证超时准确性
+            sendTimeoutMessageWithAccurateDelay(message);
         } else {
             rocketMQTemplate.syncSend(destination, MessageBuilder.withPayload(message.getMessageBody()).build());
             updateMessageStatus(message.getId());
             log.info("普通消息发送成功, messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
         }
+    }
+
+    /**
+     * 发送超时消息,并计算准确的延迟时间
+     * 确保从订单创建时刻开始计算30分钟,而不是从重发时刻开始
+     */
+    private void sendTimeoutMessageWithAccurateDelay(TransactionMessage message) {
+        try {
+            OrderTimeoutMessage timeoutMsg =
+                objectMapper.readValue(message.getMessageBody(), OrderTimeoutMessage.class);
+            
+            // 计算从订单创建到现在的时长
+            LocalDateTime orderCreateTime = message.getCreatedTime();
+            Duration elapsed = Duration.between(orderCreateTime, LocalDateTime.now());
+            
+            long expectedDelayMinutes = 30; // 预期超时时间30分钟
+            long elapsedMinutes = elapsed.toMinutes();
+            
+            if (elapsedMinutes >= expectedDelayMinutes) {
+                // 已经超过30分钟,立即发送(不延迟)
+                log.info("订单已超时,立即发送超时消息, orderNo: {}, 已过去: {}分钟", timeoutMsg.getOrderNo(), elapsedMinutes);
+                
+                rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(timeoutMsg).build());
+            } else {
+                // 计算剩余延迟时间
+                long remainingMinutes = expectedDelayMinutes - elapsedMinutes;
+                log.info("订单未超时,发送延迟消息, orderNo: {}, 剩余: {}分钟", timeoutMsg.getOrderNo(), remainingMinutes);
+                
+                // RocketMQ延迟级别: 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+                int delayLevel = calculateDelayLevel(remainingMinutes);
+                
+                rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(timeoutMsg).build(), 3000, delayLevel);
+            }
+            
+            updateMessageStatus(message.getId());
+            log.info("超时消息发送成功, messageId: {}, orderNo: {}", message.getMessageId(), timeoutMsg.getOrderNo());
+            
+        } catch (Exception e) {
+            log.error("发送超时消息失败，messageId: {}", message.getMessageId(), e);
+            throw new BusinessException("发送超时消息失败:" + e.getMessage());
+        }
+    }
+
+    /**
+     * 根据剩余分钟数计算RocketMQ延迟级别
+     * RocketMQ延迟级别: 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+     */
+    private int calculateDelayLevel(long minutes) {
+        if (minutes <= 0) return 1;           // 立即发送
+        if (minutes <= 1) return 5;           // 1分钟
+        if (minutes <= 2) return 6;           // 2分钟
+        if (minutes <= 3) return 7;           // 3分钟
+        if (minutes <= 4) return 8;           // 4分钟
+        if (minutes <= 5) return 9;           // 5分钟
+        if (minutes <= 6) return 10;          // 6分钟
+        if (minutes <= 7) return 11;          // 7分钟
+        if (minutes <= 8) return 12;          // 8分钟
+        if (minutes <= 9) return 13;          // 9分钟
+        if (minutes <= 10) return 14;         // 10分钟
+        if (minutes <= 20) return 15;         // 20分钟
+        return 16;                             // 30分钟
     }
 
     private String extractOrderNo(String messageBody) {

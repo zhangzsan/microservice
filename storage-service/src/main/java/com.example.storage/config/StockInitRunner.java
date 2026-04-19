@@ -1,4 +1,4 @@
-package com.example.storage;
+package com.example.storage.config;
 
 import com.example.storage.entity.Storage;
 import com.example.storage.mapper.StorageMapper;
@@ -29,12 +29,11 @@ public class StockInitRunner implements CommandLineRunner {
         // 1. 从数据库查询所有库存
         List<Storage> storages = storageMapper.selectList(null);
         // 2. 转成 key-value 结构
-        Map<String, Integer> stockMap = storages.stream()
-                .collect(Collectors.toMap(
+        Map<String, Integer> stockMap = storages.stream().collect(Collectors.toMap(
                         stock -> "stock:product:" + stock.getProductId(), stock -> stock.getTotal() - stock.getUsed() // 库存数量
                 ));
         // 3.批量存入Redis
         redisTemplate.opsForValue().multiSet(stockMap);
-        System.out.println("===== 库存初始化完成，共加载：" + storages.size() + " 条 =====");
+        System.out.println("===== 库存初始化完成, 共加载: " + storages.size() + " 条 =====");
     }
 }

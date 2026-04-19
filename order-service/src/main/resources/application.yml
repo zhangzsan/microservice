@@ -40,6 +40,19 @@ rocketmq:
     send-message-timeout: 3000
     retry-times: 3
     pull-batch-size: 32
+  consumer:
+    # 订单超时消费者配置
+    order-timeout-consumer:
+      topic: order-timeout-topic
+      group: order-timeout-consumer-group
+      consume-thread-min: 10    # 最小消费线程数
+      consume-thread-max: 20    # 最大消费线程数
+      pull-batch-size: 32       # 每次拉取消息数量
+      consume-message-batch-max-size: 1  # 每次消费1条消息(保证顺序)
+      # 说明:
+      # - 增加线程数可以并行处理批量到期的消息
+      # - batch-size=1 保证每个订单独立处理,避免相互影响
+      # - 20个线程可以同时处理20个订单,大幅减少排队时间
 
 redis:
   host: localhost

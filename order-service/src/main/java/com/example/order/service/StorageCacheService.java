@@ -1,7 +1,6 @@
 package com.example.order.service;
 
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import java.util.Collections;
-import java.util.concurrent.TimeUnit;
 import java.util.Arrays;
 
 @Service
@@ -82,7 +80,7 @@ public class StorageCacheService {
         }
     }
 
-    public boolean restoreStockWithRedis(Long productId, Integer quantity, String orderNo) {
+    public void restoreStockWithRedis(Long productId, Integer quantity, String orderNo) {
         String idempotentKey = STOCK_RESTORE_IDEMPOTENT_PREFIX + orderNo + ":" + productId;
         String stockKey = STOCK_KEY_PREFIX + productId;
 
@@ -93,43 +91,8 @@ public class StorageCacheService {
             } else {
                 log.warn("Redis库存已恢复(幂等拦截), 商品ID: {}, 订单号: {}", productId, orderNo);
             }
-            return true;
         } catch (Exception e) {
             log.error("Redis库存恢复脚本执行异常, 商品ID: {}, 订单号: {}", productId, orderNo, e);
-            return false;
-        }
-    }
-
-
-    public boolean deductStockWithLock(Long productId, Integer quantity) {
-        String lockKey = STOCK_LOCK_PREFIX + productId;
-        RLock lock = redissonClient.getLock(lockKey);
-        try {
-            if (lock.tryLock(3, 10, TimeUnit.SECONDS)) {
-                String key = STOCK_KEY_PREFIX + productId;
-                String stockStr = redisTemplate.opsForValue().get(key);
-                if (stockStr == null) return false;
-                int stock = Integer.parseInt(stockStr);
-                if (stock >= quantity) {
-                    redisTemplate.opsForValue().set(key, String.valueOf(stock - quantity));
-                    log.info("分布式锁扣减库存成功，商品ID: {}, 剩余: {}", productId, stock - quantity);
-                    return true;
-                } else {
-                    log.warn("库存不足，商品ID: {}, 当前库存: {}, 请求数量: {}", productId, stock, quantity);
-                    return false;
-                }
-            } else {
-                log.warn("获取分布式锁失败，商品ID: {}", productId);
-                return false;
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("分布式锁等待被中断，商品ID: {}", productId, e);
-            return false;
-        } finally {
-            if (lock.isHeldByCurrentThread()) {
-                lock.unlock();
-            }
         }
     }
 }

@@ -27,7 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.UUID;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -100,7 +100,7 @@ public class OrderService {
          */
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
-            boolean restored = storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
+            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
             throw new BusinessException(storageResult.getMessage());
         }
 
@@ -114,9 +114,12 @@ public class OrderService {
             order.setStatus(OrderStatus.PENDING.getValue());
             order.setCreatedTime(LocalDateTime.now());
             order.setUpdatedTime(order.getCreatedTime());
-            sendOrderTimeoutMessage(order);
+            
+            // 先插入订单,再发送超时消息
             orderMapper.insert(order);
-
+            
+            // 订单创建成功后,再发送超时消息
+            sendOrderTimeoutMessage(order);
             log.info("订单创建成功, 订单号: {}", orderNo);
             return convertToDTO(order);
         } catch (Exception e) {
@@ -163,12 +166,11 @@ public class OrderService {
             rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(message).build(), 3000, 16);
             log.info("订单超时延迟消息已发送，订单号: {}", order.getOrderNo());
         } catch (Exception e) {
-            log.error("发送订单超时消息失败，订单号: {}", order.getOrderNo(), e);
+            log.error("发送订单超时消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
+            // 降级保存,不影响订单创建
             saveFailedMessageToDb(order.getOrderNo(), "order-timeout-topic", "timeout", message);
-            throw new BusinessException(500, "发送超时消息失败, 订单创建回滚:" + e);
         }
     }
-
     private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
         try {
             TransactionMessage message = new TransactionMessage();
@@ -188,8 +190,9 @@ public class OrderService {
         }
     }
 
+
     private String generateOrderNo() {
-        String dateStr = LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String key = "order:no:gen:" + dateStr;
         // 利用Redis原子自增生成序列号,设置过期时间为2天防止键堆积
         Long seq = stringRedisTemplate.opsForValue().increment(key);
@@ -257,22 +260,22 @@ public class OrderService {
             log.error("订单不存在, 当前订单号: {}", orderNo);
             throw new BusinessException("提交的订单不存在,请检查提交的订单号是否正确");
         }
-        
+
         if (order.getStatus() == OrderStatus.PAID.getValue()) {
             log.info("订单已支付, 请勿重复提交,订单号: {}", orderNo);
             return Result.success("订单已支付,请勿重复支付");
         }
-        
+
         if (order.getStatus() == OrderStatus.CANCELLED.getValue()) {
             log.warn("订单已取消, 订单号: {}", orderNo);
             throw new BusinessException("订单已取消, 无法支付");
         }
-        
+
         if (order.getStatus() == OrderStatus.TIMEOUT.getValue()) {
             log.warn("订单已超时, 订单号: {}", orderNo);
             throw new BusinessException("订单已超时, 无法支付");
         }
-        
+
         if (order.getStatus() != OrderStatus.PENDING.getValue()) {
             log.error("订单状态异常, 订单号: {}, 状态: {}", orderNo, order.getStatus());
             throw new BusinessException("订单状态异常, 无法支付");
@@ -296,7 +299,6 @@ public class OrderService {
             Result<?> deduct = accountFeignClient.deduct(request);
             if (!deduct.isSuccess()) {
                 log.error("扣除用户余额失败, 订单号: {}, 原因: {}", orderNo, deduct.getMessage());
-                rollbackOrderStatus(orderNo);
                 throw new BusinessException("扣款失败: " + deduct.getMessage());
             }
 
@@ -305,22 +307,17 @@ public class OrderService {
             paymentRequest.setTransactionId("TXN" + System.currentTimeMillis() + orderNo);
             paymentRequest.setPayAmount(order.getAmount());
             paymentRequest.setPayChannel(1);
-            Result<?> result = paymentService.insertPayment(paymentRequest);
-            if (!result.isSuccess()) {
-                log.error("添加支付记录失败, 订单号: {}, 原因: {}", orderNo, result.getMessage());
-                rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());
-                rollbackOrderStatus(orderNo);
-                throw new BusinessException("支付记录创建失败: " + result.getMessage());
-            }
+            paymentService.insertPayment(paymentRequest);
             log.info("支付成功, 订单号: {}", orderNo);
             sendPointsMessage(order);
             return Result.success("支付成功");
         } catch (Exception e) {
-            log.error("支付过程异常，回滚订单状态，订单号: {}", orderNo, e);
-            rollbackOrderStatus(orderNo);
+            log.error("支付过程发生未知异常，回滚账户扣款，订单号: {}", orderNo, e);
+            rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());
             throw new BusinessException("支付失败: " + e.getMessage());
         }
     }
+
 
 
     /**
