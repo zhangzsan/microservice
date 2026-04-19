@@ -8,7 +8,7 @@ import com.example.common.constant.OrderStatus;
 import com.example.common.dto.OrderTimeoutMessage;
 import com.example.order.entity.Order;
 import com.example.order.mapper.OrderMapper;
-import com.example.order.service.ResourceRollbackService;
+import com.example.order.service.StockRollbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.ConsumeMode;
 import org.apache.rocketmq.spring.annotation.MessageModel;
@@ -37,11 +37,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 快速失败             状态检查提前返回         减少无效处理
  */
 @Component
-@RocketMQMessageListener(
-        topic = "order-timeout-topic",
-        consumerGroup = "order-timeout-consumer-group",
-        consumeMode = ConsumeMode.CONCURRENTLY,
-        messageModel = MessageModel.CLUSTERING
+@RocketMQMessageListener(topic = "order-timeout-topic", consumerGroup = "order-timeout-consumer-group",
+        consumeMode = ConsumeMode.CONCURRENTLY, messageModel = MessageModel.CLUSTERING
 )
 @Slf4j
 public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessage> {
@@ -50,7 +47,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     private OrderMapper orderMapper;
 
     @Autowired
-    private ResourceRollbackService rollbackService;
+    private StockRollbackService rollbackService;
 
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
@@ -69,7 +66,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
             int updated = orderMapper.update(null, updateWrapper);
             if (updated > 0) {
                 log.info("订单状态更新为超时成功, 异步创建回滚任务, 订单号: {}", orderNo);
-                rollbackService.createRollbackTaskAsync(message);
+                rollbackService.createRollbackTask(message);
                 log.info("订单超时处理完成, 订单号: {}", orderNo);
             } else {
                 Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -78,7 +75,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
                     return;
                 }
                 if (currentOrder.getStatus() == OrderStatus.PAID.getValue()) {
-                    log.warn("订单已支付,无需处理超时逻辑, 订单号: {}", orderNo);
+                    log.warn("订单已支付, 无需处理超时逻辑, 订单号: {}", orderNo);
                 } else if (currentOrder.getStatus() == OrderStatus.TIMEOUT.getValue()) {
                     log.debug("订单已超时, 无需重复处理, 订单号: {}", orderNo);
                 } else if (currentOrder.getStatus() == OrderStatus.CANCELLED.getValue()) {

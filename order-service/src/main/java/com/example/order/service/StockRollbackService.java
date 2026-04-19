@@ -14,13 +14,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * 优化 ResourceRollbackService - 异步批量处理
@@ -28,7 +26,7 @@ import java.util.concurrent.CompletableFuture;
  */
 @Service
 @Slf4j
-public class ResourceRollbackService {
+public class StockRollbackService {
 
     @Autowired
     private OrderOperationLogMapper operationLogMapper;
@@ -67,7 +65,6 @@ public class ResourceRollbackService {
             blog.setMaxRetryCount(3);
             blog.setRequestData(objectMapper.writeValueAsString(message));
             blog.setNextRetryTime(LocalDateTime.now());
-
             operationLogMapper.insert(blog);
             log.info("创建回滚任务成功，订单号: {}", message.getOrderNo());
             
@@ -76,17 +73,6 @@ public class ResourceRollbackService {
         } catch (Exception e) {
             log.error("创建回滚任务失败, 订单号: {}", message.getOrderNo(), e);
             throw new BusinessException("创建回滚任务失败:" +  e);
-        }
-    }
-
-    @Async("rollbackExecutor")
-    public void createRollbackTaskAsync(OrderTimeoutMessage message) {
-        try {
-            createRollbackTask(message);
-            CompletableFuture.completedFuture(null);
-        } catch (Exception e) {
-            log.error("异步创建回滚任务失败，订单号: {}", message.getOrderNo(), e);
-            CompletableFuture.failedFuture(e);
         }
     }
 
@@ -116,20 +102,27 @@ public class ResourceRollbackService {
             updateLogStatus(logId, OperationStatus.SUCCESS, null);
             log.info("资源回滚成功, 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
-            int retryCount = operationLog.getRetryCount() + 1;
-            LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(retryCount * 5L);
+            // 使用CAS原子更新重试次数，避免高并发问题
+            int currentRetryCount = operationLog.getRetryCount();
+            int newRetryCount = currentRetryCount + 1;
+            LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(newRetryCount * 5L);
 
             LambdaUpdateWrapper<OrderOperationLog> updateWrapper = 
                 new LambdaUpdateWrapper<OrderOperationLog>()
                     .eq(OrderOperationLog::getId, logId)
-                    .set(OrderOperationLog::getRetryCount, retryCount)
+                    .eq(OrderOperationLog::getRetryCount, currentRetryCount)  // CAS条件：确保基于最新版本更新
+                    .set(OrderOperationLog::getRetryCount, newRetryCount)
                     .set(OrderOperationLog::getNextRetryTime, nextRetryTime)
                     .set(OrderOperationLog::getErrorMessage, e.getMessage())
                     .set(OrderOperationLog::getOperationStatus, OperationStatus.FAILED.getValue());
 
-            operationLogMapper.update(null, updateWrapper);
-
-            log.error("资源回滚失败，将重试，订单号: {}, 重试次数: {}", operationLog.getOrderNo(), retryCount, e);
+            int updated = operationLogMapper.update(null, updateWrapper);
+            if (updated == 0) {
+                log.warn("CAS更新失败(可能已被其他线程更新)，跳过本次重试计数，ID: {}, 订单号: {}", logId, operationLog.getOrderNo());
+                return;
+            }
+            
+            log.error("资源回滚失败，将重试，订单号: {}, 重试次数: {}/{}", operationLog.getOrderNo(), newRetryCount, operationLog.getMaxRetryCount(), e);
         }
     }
 

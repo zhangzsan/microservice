@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.common.constant.OperationStatus;
 import com.example.order.entity.OrderOperationLog;
 import com.example.order.mapper.OrderOperationLogMapper;
-import com.example.order.service.ResourceRollbackService;
+import com.example.order.service.StockRollbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -17,13 +17,13 @@ import java.util.stream.Collectors;
 //优化定时补偿任务-批量处理
 @Component
 @Slf4j
-public class RollbackCompensationTask {
+public class StockCompensationTask {
 
     @Autowired
     private OrderOperationLogMapper operationLogMapper;
 
     @Autowired
-    private ResourceRollbackService rollbackService;
+    private StockRollbackService rollbackService;
 
     @Scheduled(fixedDelay = 60000)
     public void compensateFailedRollbacks() {
@@ -42,9 +42,7 @@ public class RollbackCompensationTask {
 
         log.info("发现 {} 个需要补偿的任务", failedLogs.size());
         
-        List<Long> logIds = failedLogs.stream()
-            .map(OrderOperationLog::getId)
-            .collect(Collectors.toList());
+        List<Long> logIds = failedLogs.stream().map(OrderOperationLog::getId).collect(Collectors.toList());
         
         try {
             rollbackService.executeBatchRollback(logIds);

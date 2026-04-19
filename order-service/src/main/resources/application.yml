@@ -39,6 +39,7 @@ rocketmq:
     group: order-producer-group
     send-message-timeout: 3000
     retry-times: 3
+    pull-batch-size: 32
 
 redis:
   host: localhost

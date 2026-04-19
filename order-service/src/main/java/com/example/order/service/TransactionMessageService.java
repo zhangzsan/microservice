@@ -5,7 +5,6 @@ import com.example.common.exception.BusinessException;
 import com.example.order.constant.MessageStatus;
 import com.example.order.entity.TransactionMessage;
 import com.example.order.mapper.TransactionMessageMapper;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -38,9 +37,6 @@ public class TransactionMessageService {
     @Autowired
     private ObjectMapper objectMapper;
 
-    /**
-     * 配合redis缓存数据
-     */
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
@@ -92,19 +88,9 @@ public class TransactionMessageService {
     @Transactional(rollbackFor = Exception.class)
     public void saveMessage(TransactionMessage message) {
         transactionMessageMapper.insert(message);
-        
         if (message.getStatus().equals(MessageStatus.PENDING.getValue())) {
-            long score = message.getNextRetryTime()
-                .atZone(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli();
-            
-            stringRedisTemplate.opsForZSet().add(
-                PENDING_QUEUE_KEY, 
-                message.getId().toString(), 
-                score
-            );
-            
+            long score = message.getNextRetryTime().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            stringRedisTemplate.opsForZSet().add(PENDING_QUEUE_KEY, message.getId().toString(), score);
             log.debug("消息已加入Redis调度队列, ID: {}, 时间戳: {}", message.getId(), score);
         }
     }
@@ -113,26 +99,23 @@ public class TransactionMessageService {
     public void sendPendingMessages() {
         long now = System.currentTimeMillis();
         
-        Set<String> messageIds = stringRedisTemplate.opsForZSet()
-            .rangeByScore(PENDING_QUEUE_KEY, 0, now, 0, 20);
+        Set<String> messageIds = stringRedisTemplate.opsForZSet().rangeByScore(PENDING_QUEUE_KEY, 0, now, 0, 20);
         
         if (messageIds == null || messageIds.isEmpty()) {
             return;
         }
 
         log.info("从Redis获取到 {} 条待发送消息", messageIds.size());
-
         for (String messageId : messageIds) {
             String lockKey = LOCK_KEY_PREFIX + messageId;
             String lockOwner = Thread.currentThread().getId() + ":" + System.currentTimeMillis();
-            
+            //设置超时时间30s
             Long acquired = stringRedisTemplate.execute(acquireLockScript, List.of(lockKey), "30");
             
             if (acquired == 0) {
                 log.debug("消息正在处理中,跳过, ID: {}", messageId);
                 continue;
             }
-
             try {
                 Long id = Long.parseLong(messageId);
                 TransactionMessage message = transactionMessageMapper.selectById(id);
@@ -144,7 +127,7 @@ public class TransactionMessageService {
                 }
 
                 if (isMessageCompleted(message.getStatus())) {
-                    log.debug("消息已完成，从Redis清理，ID: {}", messageId);
+                    log.debug("消息已完成, 从Redis清理，ID: {}", messageId);
                     cleanupMessage(messageId);
                     continue;
                 }
@@ -170,7 +153,7 @@ public class TransactionMessageService {
         }
     }
 
-    private void sendMessage(TransactionMessage message) throws JsonProcessingException {
+    private void sendMessage(TransactionMessage message) {
         String destination = message.getTopic() + ":" + message.getTag();
         
         if ("points-tx-topic".equals(message.getTopic())) {
@@ -184,7 +167,7 @@ public class TransactionMessageService {
                 );
                 
                 updateMessageStatus(message.getId());
-                log.info("事务消息发送成功，messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
+                log.info("事务消息发送成功, messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
             } catch (Exception e) {
                 log.error("发送事务消息失败，messageId: {}", message.getMessageId(), e);
                 throw new BusinessException("发送事务消息失败:" + e.getMessage());
@@ -192,7 +175,7 @@ public class TransactionMessageService {
         } else {
             rocketMQTemplate.syncSend(destination, MessageBuilder.withPayload(message.getMessageBody()).build());
             updateMessageStatus(message.getId());
-            log.info("普通消息发送成功，messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
+            log.info("普通消息发送成功, messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
         }
     }
 
@@ -208,6 +191,7 @@ public class TransactionMessageService {
     private void updateMessageStatus(Long id) {
         LambdaUpdateWrapper<TransactionMessage> updateWrapper = 
             new LambdaUpdateWrapper<TransactionMessage>().eq(TransactionMessage::getId, id)
+                    .eq(TransactionMessage::getStatus, MessageStatus.PENDING.getValue())
                 .set(TransactionMessage::getStatus, MessageStatus.SENT.getValue());
         
         transactionMessageMapper.update(null, updateWrapper);
@@ -224,36 +208,63 @@ public class TransactionMessageService {
                 return;
             }
 
-            int retryCount = message.getRetryCount() + 1;
-            LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(retryCount * 2L);
+            // 使用CAS原子更新重试次数，避免高并发问题
+            boolean casSuccess = false;
+            int maxCasRetries = 3;  // CAS最多重试3次
             
-            LambdaUpdateWrapper<TransactionMessage> updateWrapper = 
-                new LambdaUpdateWrapper<TransactionMessage>()
-                    .eq(TransactionMessage::getId, id)
-                    .set(TransactionMessage::getRetryCount, retryCount)
-                    .set(TransactionMessage::getNextRetryTime, nextRetryTime)
-                    .set(TransactionMessage::getErrorMessage, errorMsg);
+            for (int i = 0; i < maxCasRetries && !casSuccess; i++) {
+                // 重新查询最新数据
+                TransactionMessage latestMessage = transactionMessageMapper.selectById(id);
+                if (latestMessage == null) {
+                    log.warn("消息不存在, 从Redis清理, ID: {}", messageId);
+                    cleanupMessage(messageId);
+                    return;
+                }
+                
+                int currentRetryCount = latestMessage.getRetryCount();
+                int newRetryCount = currentRetryCount + 1;
+                LocalDateTime nextRetryTime = LocalDateTime.now().plusMinutes(newRetryCount * 2L);
+                
+                LambdaUpdateWrapper<TransactionMessage> updateWrapper = 
+                    new LambdaUpdateWrapper<TransactionMessage>()
+                        .eq(TransactionMessage::getId, id)
+                        .eq(TransactionMessage::getRetryCount, currentRetryCount)  // CAS条件
+                        .set(TransactionMessage::getRetryCount, newRetryCount)
+                        .set(TransactionMessage::getNextRetryTime, nextRetryTime)
+                        .set(TransactionMessage::getErrorMessage, errorMsg);
+                
+                if (newRetryCount >= currentRetryCount) {
+                    updateWrapper.set(TransactionMessage::getStatus, MessageStatus.FAILED.getValue());
+                    cleanupMessage(messageId);
+                    log.error("消息发送失败已达最大重试次数, 需人工介入，messageId: {}, topic: {}",
+                        latestMessage.getMessageId(), latestMessage.getTopic());
+                    transactionMessageMapper.update(null, updateWrapper);
+                    casSuccess = true;
+                } else {
+                    int updated = transactionMessageMapper.update(null, updateWrapper);
+                    if (updated > 0) {
+                        casSuccess = true;
+                        long nextRetryScore = nextRetryTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                        
+                        stringRedisTemplate.execute(addWithRetryScript, List.of(PENDING_QUEUE_KEY), messageId, String.valueOf(nextRetryScore));
+                        
+                        log.warn("消息发送失败, 将重试, messageId: {}, 重试次数: {}/{}", latestMessage.getMessageId(), newRetryCount, latestMessage.getMaxRetryCount());
+                    } else {
+                        log.warn("CAS更新失败，准备重试({}/{}), ID: {}", i + 1, maxCasRetries, id);
+                        if (i < maxCasRetries - 1) {
+                            try {
+                                Thread.sleep(50);  // 短暂等待后重试
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
             
-            if (retryCount >= message.getMaxRetryCount()) {
-                updateWrapper.set(TransactionMessage::getStatus, MessageStatus.FAILED.getValue());
-                cleanupMessage(messageId);
-                log.error("消息发送失败已达最大重试次数, 需人工介入，messageId: {}, topic: {}",
-                    message.getMessageId(), message.getTopic());
-            } else {
-                transactionMessageMapper.update(null, updateWrapper);
-                
-                long nextRetryScore = nextRetryTime
-                    .atZone(ZoneId.systemDefault())
-                    .toInstant()
-                    .toEpochMilli();
-                
-                stringRedisTemplate.execute(
-                    addWithRetryScript, List.of(PENDING_QUEUE_KEY),
-                    messageId,
-                    String.valueOf(nextRetryScore)
-                );
-                
-                log.warn("消息发送失败, 将重试, messageId: {}, 重试次数: {}", message.getMessageId(), retryCount);
+            if (!casSuccess) {
+                log.error("CAS更新多次失败，放弃更新，ID: {}, messageId: {}", id, messageId);
             }
         } catch (Exception e) {
             log.error("处理发送失败异常，messageId: {}", messageId, e);
@@ -275,17 +286,14 @@ public class TransactionMessageService {
     public void reconcileRedisWithDatabase() {
         log.info("开始对账Redis与数据库状态");
         
-        Set<String> pendingIds = stringRedisTemplate.opsForZSet()
-            .range(PENDING_QUEUE_KEY, 0, -1);
+        Set<String> pendingIds = stringRedisTemplate.opsForZSet().range(PENDING_QUEUE_KEY, 0, -1);
         
         if (pendingIds == null || pendingIds.isEmpty()) {
             log.info("Redis中无待发送消息");
             return;
         }
 
-        List<Long> ids = pendingIds.stream()
-            .map(Long::parseLong)
-            .collect(Collectors.toList());
+        List<Long> ids = pendingIds.stream().map(Long::parseLong).collect(Collectors.toList());
 
         List<TransactionMessage> messages = transactionMessageMapper.selectBatchIds(ids);
         

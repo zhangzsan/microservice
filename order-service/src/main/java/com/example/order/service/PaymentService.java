@@ -34,7 +34,7 @@ public class PaymentService {
             }
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("Duplicate entry")) {
-                log.warn("支付记录已存在，订单号: {}", request.getOrderNo());
+                log.warn("支付记录已存在, 订单号: {}", request.getOrderNo());
                 return Result.success();
             } else {
                 return Result.error("支付记录添加失败: " + e.getMessage());

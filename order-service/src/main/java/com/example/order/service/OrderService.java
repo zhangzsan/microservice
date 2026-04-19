@@ -79,7 +79,6 @@ public class OrderService {
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
         log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
-        
         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(request.getProductId(), request.getQuantity());
         if (!cacheDeductSuccess) {
             throw new BusinessException("库存不足,请选择其他商品下单");
@@ -289,6 +288,7 @@ public class OrderService {
         }
 
         try {
+            //模拟扣款操作
             AccountDeductRequest request = new AccountDeductRequest();
             request.setOrderNo(orderNo);
             request.setUserId(order.getUserId());

@@ -37,7 +37,7 @@ public class PaymentCompensationTask {
     @Scheduled(fixedDelay = 300000) //每5分钟执行一次
     public void compensateStuckPayments() {
         log.info("开始执行支付异常订单补偿任务");
-        
+        //查找创建时间在35分钟内的订单
         LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(35);
         
         List<Order> stuckOrders = orderMapper.selectList(
@@ -85,8 +85,7 @@ public class PaymentCompensationTask {
         String orderNo = order.getOrderNo();
         log.info("处理卡单订单, 订单号: {}, 用户ID: {}, 创建时间: {}", orderNo, order.getUserId(), order.getCreatedTime());
 
-        PaymentRecord paymentRecord = paymentRecordMapper.selectOne(
-            new LambdaQueryWrapper<PaymentRecord>().eq(PaymentRecord::getOrderNo, orderNo));
+        PaymentRecord paymentRecord = paymentRecordMapper.selectOne(new LambdaQueryWrapper<PaymentRecord>().eq(PaymentRecord::getOrderNo, orderNo));
 
         if (paymentRecord != null) {
             log.warn("订单存在支付记录但未更新状态, 尝试补偿，订单号: {}", orderNo);
@@ -102,8 +101,7 @@ public class PaymentCompensationTask {
         String orderNo = order.getOrderNo();
         
         try {
-            LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
-                .eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.PAID.getValue());
+            LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>().eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.PAID.getValue());
 
             int updated = orderMapper.update(null, updateWrapper);
             
@@ -117,7 +115,7 @@ public class PaymentCompensationTask {
                     log.info("订单已被其他线程补偿为PAID，订单号: {}", orderNo);
                     return CompensationResult.NO_ACTION_NEEDED;
                 } else if (currentOrder.getStatus() == OrderStatus.TIMEOUT.getValue()) {
-                    log.warn("订单已超时，需要回滚支付, 订单号: {}", orderNo);
+                    log.warn("订单已超时, 需要回滚支付, 订单号: {}", orderNo);
                     return rollbackPaymentAndNotify(order, paymentRecord);
                 } else {
                     log.error("订单状态异常，需要人工介入, 订单号: {}, 当前状态: {}", orderNo, currentOrder.getStatus());
