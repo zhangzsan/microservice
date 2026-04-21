@@ -13,4 +13,5 @@ public class OrderCreateRequest {
     private Long productId;
     private Integer quantity;
     private BigDecimal amount;
+    private String orderNo; // 前端传递的预生成订单号(可选)
 }

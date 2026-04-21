@@ -24,6 +24,17 @@ public class OrderController {
     }
 
     /**
+     * 预生成订单号(用于防重复提交)
+     * 前端进入下单页时调用,获取订单号后在提交时携带
+     */
+    @GetMapping("/pre-generate-order-no")
+    public Result<String> preGenerateOrderNo() {
+        String orderNo = orderService.generateAndReserveOrderNo();
+        log.info("预生成订单号: {}", orderNo);
+        return Result.success(orderNo);
+    }
+
+    /**
      *  支付订单
      */
     @PostMapping("/pay/{orderNo}")

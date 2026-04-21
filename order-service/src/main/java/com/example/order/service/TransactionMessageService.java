@@ -344,8 +344,27 @@ public class TransactionMessageService {
                status.equals(MessageStatus.FAILED.getValue());
     }
 
-    @Scheduled(fixedDelay = 300000)
-    public void reconcileRedisWithDatabase() {
+    /**
+     * 合并维护任务: Redis对账 + 恢复卡住的锁
+     * 每10分钟执行一次,减少定时任务数量
+     */
+    @Scheduled(fixedDelay = 600000)
+    public void maintenanceTasks() {
+        log.info("开始执行消息系统维护任务");
+        
+        // 1. Redis与数据库对账
+        reconcileRedisWithDatabase();
+        
+        // 2. 恢复卡住的消息锁
+        recoverStuckMessages();
+        
+        log.info("消息系统维护任务完成");
+    }
+
+    /**
+     * Redis与数据库对账,清理已完成的消息
+     */
+    private void reconcileRedisWithDatabase() {
         log.info("开始对账Redis与数据库状态");
         
         Set<String> pendingIds = stringRedisTemplate.opsForZSet().range(PENDING_QUEUE_KEY, 0, -1);
@@ -371,8 +390,10 @@ public class TransactionMessageService {
         log.info("对账完成, 清理 {} 条已完成消息", cleanedCount);
     }
 
-    @Scheduled(fixedDelay = 600000)
-    public void recoverStuckMessages() {
+    /**
+     * 恢复卡住的消息锁(锁存在但没有TTL,说明释放失败)
+     */
+    private void recoverStuckMessages() {
         log.info("检查卡住的消息");
         Set<String> pendingIds = stringRedisTemplate.opsForZSet().range(PENDING_QUEUE_KEY, 0, -1);
         

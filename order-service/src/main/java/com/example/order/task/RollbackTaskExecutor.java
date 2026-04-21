@@ -1,7 +1,6 @@
 package com.example.order.task;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.example.common.constant.OperationStatus;
 import com.example.common.constant.OrderStatus;
 import com.example.common.dto.OrderTimeoutMessage;
 import com.example.order.entity.Order;
@@ -16,11 +15,19 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
- * 回滚任务执行定时任务
- * 定期扫描待执行的回滚任务并异步执行
+ * 回滚任务补偿定时任务
+ * 
+ * 职责说明:
+ * compensateMissingRollbackTasks - 补偿缺失的回滚任务记录
+ *    场景: 订单已超时(TIMEOUT),但order_operation_log表中没有对应记录
+ *    原因: createRollbackTask调用失败(网络异常、DB异常等)
+
+ * 注意:
+ * - 回滚任务的执行由 StockCompensationTask 负责
+ * - StockCompensationTask 会扫描 PROCESSING/FAILED 状态的任务并触发执行
+ * - 本类只负责任务记录的补偿创建,不负责执行
  */
 @Component
 @Slf4j
@@ -36,49 +43,14 @@ public class RollbackTaskExecutor {
     private OrderMapper orderMapper;
 
     /**
-     * 每30秒执行一次,扫描待处理的回滚任务
+     * 补偿机制: 每2分钟扫描一次,检测超时订单是否有对应的回滚任务记录
+     * 
+     * 说明:
+     * - RocketMQ消费者处理延迟通常在秒级
+     * - 10分钟阈值已经很大,2分钟扫描频率足够
+     * - 降低频率可减少数据库压力
      */
-    @Scheduled(fixedDelay = 30000)
-    public void executePendingRollbackTasks() {
-        log.debug("开始扫描待执行的回滚任务");
-        
-        // 查询状态为PROCESSING且到达重试时间的任务
-        List<OrderOperationLog> pendingTasks = operationLogMapper.selectList(
-            new LambdaQueryWrapper<OrderOperationLog>()
-                .eq(OrderOperationLog::getOperationStatus, OperationStatus.PROCESSING.getValue())
-                .le(OrderOperationLog::getNextRetryTime, LocalDateTime.now())
-                .last("LIMIT 50")  // 每次最多处理50个任务
-        );
-
-        if (pendingTasks.isEmpty()) {
-            log.debug("无待执行的回滚任务");
-            return;
-        }
-
-        log.info("发现 {} 个待执行的回滚任务,开始批量处理", pendingTasks.size());
-        
-        int successCount = 0;
-        int failCount = 0;
-        
-        for (OrderOperationLog task : pendingTasks) {
-            try {
-                // 异步执行回滚(StockRollbackService.executeRollback已有@Async)
-                stockRollbackService.executeRollback(task.getId());
-                successCount++;
-            } catch (Exception e) {
-                log.error("提交回滚任务失败, ID: {}, 订单号: {}", task.getId(), task.getOrderNo(), e);
-                failCount++;
-            }
-        }
-        
-        log.info("回滚任务提交完成 - 成功: {}, 失败: {}", successCount, failCount);
-    }
-
-    /**
-     * 每分钟扫描一次,检测超时订单是否有对应的回滚任务
-     * 补偿机制: 如果createRollbackTask失败,这里会兜底创建
-     */
-    @Scheduled(fixedDelay = 60000)
+    @Scheduled(fixedDelay = 120000)
     public void compensateMissingRollbackTasks() {
         log.debug("开始扫描缺失的回滚任务");
         
@@ -134,33 +106,6 @@ public class RollbackTaskExecutor {
         
         if (createdCount > 0 || skippedCount > 0) {
             log.info("回滚任务补偿完成 - 创建: {}, 跳过(已存在): {}", createdCount, skippedCount);
-        }
-    }
-
-    /**
-     * 每小时清理一次已完成的任务日志(可选,避免数据堆积)
-     */
-    @Scheduled(fixedDelay = 3600000)
-    public void cleanupCompletedTasks() {
-        log.info("开始清理已完成的回滚任务日志");
-        
-        // 删除7天前已成功或失败的任务
-        LocalDateTime threshold = LocalDateTime.now().minusDays(7);
-        
-        List<Long> completedIds = operationLogMapper.selectList(
-            new LambdaQueryWrapper<OrderOperationLog>()
-                .in(OrderOperationLog::getOperationStatus, 
-                    OperationStatus.SUCCESS.getValue(), 
-                    OperationStatus.FAILED.getValue())
-                .lt(OrderOperationLog::getCreatedTime, threshold)
-                .last("LIMIT 1000")
-        ).stream().map(OrderOperationLog::getId).collect(Collectors.toList());
-        
-        if (!completedIds.isEmpty()) {
-            operationLogMapper.deleteBatchIds(completedIds);
-            log.info("清理了 {} 条已完成的任务日志", completedIds.size());
-        } else {
-            log.debug("无需清理的任务日志");
         }
     }
 }

@@ -79,12 +79,20 @@ public class OrderService {
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
         log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
+        
+        // 如果前端传递了订单号,使用它;否则后端生成
+        String orderNo = request.getOrderNo();
+        if (orderNo == null || orderNo.isEmpty()) {
+            orderNo = generateOrderNo();
+            log.info("后端生成订单号: {}", orderNo);
+        } else {
+            log.info("使用前端传递的订单号: {}", orderNo);
+        }
+        
         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(request.getProductId(), request.getQuantity());
         if (!cacheDeductSuccess) {
             throw new BusinessException("库存不足,请选择其他商品下单");
         }
-        
-        String orderNo = generateOrderNo();
 
         StorageDeductRequest storageRequest = new StorageDeductRequest();
         storageRequest.setProductId(request.getProductId());
@@ -116,12 +124,18 @@ public class OrderService {
             order.setUpdatedTime(order.getCreatedTime());
             
             // 先插入订单,再发送超时消息
+            // 如果订单号已存在,会抛出DuplicateKeyException
             orderMapper.insert(order);
             
             // 订单创建成功后,再发送超时消息
             sendOrderTimeoutMessage(order);
             log.info("订单创建成功, 订单号: {}", orderNo);
             return convertToDTO(order);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            log.warn("订单号已存在,防止重复提交, 订单号: {}", orderNo);
+            storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
+            rollbackStorageDeduct(orderNo, request.getProductId(), request.getQuantity());
+            throw new BusinessException("订单已存在,请勿重复提交");
         } catch (Exception e) {
             log.error("订单创建失败, 订单号: {}", orderNo, e);
             storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
@@ -201,6 +215,20 @@ public class OrderService {
         }
         // 格式：ORD2026041800000001
         return String.format("ORD%s%08d", dateStr, seq);
+    }
+
+    /**
+     * 预生成并预留订单号(用于防重复提交)
+     * 前端进入下单页时调用,获取订单号后在提交时携带
+     * 订单号会被标记为“已预留”,5分钟后未使用则自动释放
+     */
+    public String generateAndReserveOrderNo() {
+        String orderNo = generateOrderNo();
+        // 在Redis中标记该订单号已被预留,有效期5分钟
+        String reserveKey = "order:reserve:" + orderNo;
+        stringRedisTemplate.opsForValue().set(reserveKey, "reserved", 5, TimeUnit.MINUTES);
+        log.info("订单号已预留: {}, 5分钟内有效", orderNo);
+        return orderNo;
     }
 
     private OrderDTO convertToDTO(Order order) {

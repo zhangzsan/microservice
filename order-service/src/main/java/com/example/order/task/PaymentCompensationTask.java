@@ -49,7 +49,15 @@ public class PaymentCompensationTask {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Scheduled(fixedDelay = 300000) //每5分钟执行一次
+    /**
+     * 补偿卡单订单
+     * 
+     * 说明:
+     * - 扫描创建时间超过35分钟仍为PENDING状态的订单
+     * - 检查是否有支付记录,进行相应补偿
+     * - 10分钟频率足够,因为阈值是35分钟,有充足缓冲
+     */
+    @Scheduled(fixedDelay = 600000) //每10分钟执行一次
     public void compensateStuckPayments() {
         log.info("开始执行支付异常订单补偿任务");
         //查找创建时间在35分钟内的订单
@@ -219,9 +227,7 @@ public class PaymentCompensationTask {
             rocketMQTemplate.sendMessageInTransaction(
                 "points-tx-topic", 
                 MessageBuilder.withPayload(pointsMessage)
-                    .setHeader("order_no", order.getOrderNo())
-                    .build(),
-                order.getOrderNo()
+                    .setHeader("order_no", order.getOrderNo()).build(), order.getOrderNo()
             );
             
             log.info("补偿发送积分事务消息成功, 订单号: {}", order.getOrderNo());
