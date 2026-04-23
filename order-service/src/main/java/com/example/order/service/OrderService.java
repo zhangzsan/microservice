@@ -8,6 +8,7 @@ import com.example.common.constant.OrderStatus;
 import com.example.common.dto.*;
 import com.example.common.exception.BusinessException;
 import com.example.common.result.Result;
+import com.example.order.constant.RedisConstant;
 import com.example.order.dto.OrderDTO;
 import com.example.order.entity.Order;
 import com.example.order.entity.TransactionMessage;
@@ -16,10 +17,12 @@ import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
@@ -80,15 +83,32 @@ public class OrderService {
     public OrderDTO createOrder(OrderCreateRequest request) {
         log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
         
-        // 如果前端传递了订单号,使用它;否则后端生成
         String orderNo = request.getOrderNo();
-        if (orderNo == null || orderNo.isEmpty()) {
-            orderNo = generateOrderNo();
-            log.info("后端生成订单号: {}", orderNo);
-        } else {
-            log.info("使用前端传递的订单号: {}", orderNo);
+        if(StringUtils.isEmpty(orderNo)){
+            throw new BusinessException("请求参数不合法");
+        }
+
+        String processingKey = RedisConstant.ORDER_PROCESSING + orderNo;
+        Boolean isFirstSubmit = stringRedisTemplate.opsForValue().setIfAbsent(processingKey, "processing", 10, TimeUnit.MINUTES);
+        
+        if (Boolean.FALSE.equals(isFirstSubmit)) {
+            log.warn("订单号正在处理中或已处理,拒绝重复提交, 订单号: {}", orderNo);
+            throw new BusinessException("订单正在处理中,请勿重复提交");
         }
         
+        try {
+            return doCreateOrder(request, orderNo);
+        } catch (Exception e) {
+            stringRedisTemplate.delete(processingKey);
+            log.error("订单创建失败,已清除处理标记, 订单号: {}", orderNo, e);
+            throw new BusinessException(e.getMessage());
+        }
+    }
+
+    /**
+     * 执行订单创建的核心逻辑
+     */
+    private OrderDTO doCreateOrder(OrderCreateRequest request, String orderNo) {
         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(request.getProductId(), request.getQuantity());
         if (!cacheDeductSuccess) {
             throw new BusinessException("库存不足,请选择其他商品下单");
@@ -131,7 +151,7 @@ public class OrderService {
             sendOrderTimeoutMessage(order);
             log.info("订单创建成功, 订单号: {}", orderNo);
             return convertToDTO(order);
-        } catch (org.springframework.dao.DuplicateKeyException e) {
+        } catch (DuplicateKeyException e) {
             log.warn("订单号已存在,防止重复提交, 订单号: {}", orderNo);
             storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
             rollbackStorageDeduct(orderNo, request.getProductId(), request.getQuantity());
@@ -256,7 +276,7 @@ public class OrderService {
     @SentinelResource(value = "pay-order", blockHandler = "handlePayOrderBlock")
     @Transactional(rollbackFor = Exception.class)
     public Result<?> payOrder(String orderNo) {
-        String lockKey = "lock:pay:" + orderNo;
+        String lockKey = RedisConstant.LOCK_PAY + orderNo;
         RLock lock = redissonClient.getLock(lockKey);
         try {
             boolean locked = lock.tryLock(5, TimeUnit.SECONDS);
