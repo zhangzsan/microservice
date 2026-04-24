@@ -339,9 +339,7 @@ public class TransactionMessageService {
     }
 
     private boolean isMessageCompleted(Integer status) {
-        return status.equals(MessageStatus.SENT.getValue()) ||
-               status.equals(MessageStatus.CONFIRMED.getValue()) ||
-               status.equals(MessageStatus.FAILED.getValue());
+        return status.equals(MessageStatus.SENT.getValue()) || status.equals(MessageStatus.CONFIRMED.getValue()) || status.equals(MessageStatus.FAILED.getValue());
     }
 
     /**

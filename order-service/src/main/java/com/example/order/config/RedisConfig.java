@@ -11,7 +11,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 @Configuration
 public class RedisConfig {
 
-    private static final String REDIS_HOST = "127.0.0.1";
+    private static final String REDIS_HOST = "localhost";
 
     private static final int REDIS_PORT = 6379;
 

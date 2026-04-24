@@ -8,6 +8,7 @@ import com.example.common.constant.OrderStatus;
 import com.example.common.dto.*;
 import com.example.common.exception.BusinessException;
 import com.example.common.result.Result;
+import com.example.order.constant.MessageStatus;
 import com.example.order.constant.RedisConstant;
 import com.example.order.dto.OrderDTO;
 import com.example.order.entity.Order;
@@ -31,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -67,17 +69,6 @@ public class OrderService {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
-    /**
-     *
-     时间线(同一用户快速点击2次)：
-     T1: 请求A - Redis扣减库存成功（剩余99）
-     T2: 请求B - Redis扣减库存成功（剩余98）
-     T3: 请求A - Feign调用库存服务（成功）
-     T4: 请求B - Feign调用库存服务（成功）
-     T5: 请求A - 创建订单A ✅
-     T6: 请求B - 创建订单B ✅
-     结果：用户下了2单, 但可能只想要1单！
-     */
     @SentinelResource(value = "create-order", blockHandler = "handleCreateOrderBlock")
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
@@ -88,6 +79,9 @@ public class OrderService {
             throw new BusinessException("请求参数不合法");
         }
 
+        /*
+         * 控制10分钟内不能重复提交
+         */
         String processingKey = RedisConstant.ORDER_PROCESSING + orderNo;
         Boolean isFirstSubmit = stringRedisTemplate.opsForValue().setIfAbsent(processingKey, "processing", 10, TimeUnit.MINUTES);
         
@@ -118,14 +112,6 @@ public class OrderService {
         storageRequest.setProductId(request.getProductId());
         storageRequest.setQuantity(request.getQuantity());
         storageRequest.setOrderNo(orderNo);
-        /*
-         * 库存服务宕机或响应慢：
-         * ├─ Feign默认超时时间:60秒
-         * ├─ 100个请求同时调用→ 100个线程阻塞60秒
-         * ├─ 线程池耗尽
-         * ├─ 新请求无法处理
-         * └─ 雪崩效应 ❌
-         */
         Result<?> storageResult = storageFeignClient.deduct(storageRequest);
         if (!storageResult.isSuccess()) {
             storageCacheService.restoreStockWithRedis(request.getProductId(), request.getQuantity(), orderNo);
@@ -143,7 +129,6 @@ public class OrderService {
             order.setCreatedTime(LocalDateTime.now());
             order.setUpdatedTime(order.getCreatedTime());
             
-            // 先插入订单,再发送超时消息
             // 如果订单号已存在,会抛出DuplicateKeyException
             orderMapper.insert(order);
             
@@ -175,17 +160,11 @@ public class OrderService {
             pointsMessage.setUserId(order.getUserId());
             pointsMessage.setOrderNo(order.getOrderNo());
             pointsMessage.setPoints(order.getAmount().intValue());
-
-            rocketMQTemplate.sendMessageInTransaction(
-                "points-tx-topic", MessageBuilder.withPayload(pointsMessage).setHeader("order_no", order.getOrderNo()).build(),
-                order.getOrderNo()
-            );
-            
+            rocketMQTemplate.sendMessageInTransaction("points-tx-topic", MessageBuilder.withPayload(pointsMessage).setHeader("order_no", order.getOrderNo()).build(), order.getOrderNo());
             log.info("积分事务消息已发送，订单号: {}", order.getOrderNo());
         } catch (Exception e) {
             log.error("发送积分事务消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
-            saveFailedMessageToDb(order.getOrderNo(), "points-tx-topic", "points", 
-                new PointsMessage(order.getUserId(), order.getOrderNo(), order.getAmount().intValue()));
+            saveFailedMessageToDb(order.getOrderNo(), "points-tx-topic", "points", new PointsMessage(order.getUserId(), order.getOrderNo(), order.getAmount().intValue()));
         }
     }
 
@@ -208,11 +187,11 @@ public class OrderService {
     private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
         try {
             TransactionMessage message = new TransactionMessage();
-            message.setMessageId(java.util.UUID.randomUUID().toString().replace("-", ""));
+            message.setMessageId(UUID.randomUUID().toString().replace("-", ""));
             message.setTopic(topic);
             message.setTag(tag);
             message.setMessageBody(objectMapper.writeValueAsString(body));
-            message.setStatus(com.example.order.constant.MessageStatus.PENDING.getValue());
+            message.setStatus(MessageStatus.PENDING.getValue());
             message.setRetryCount(0);
             message.setMaxRetryCount(3);
             message.setNextRetryTime(LocalDateTime.now());
@@ -355,8 +334,17 @@ public class OrderService {
             paymentRequest.setTransactionId("TXN" + System.currentTimeMillis() + orderNo);
             paymentRequest.setPayAmount(order.getAmount());
             paymentRequest.setPayChannel(1);
-            paymentService.insertPayment(paymentRequest);
+            
+            // 检查支付记录是否真正插入成功
+            boolean paymentInserted = paymentService.insertPayment(paymentRequest);
+            if (!paymentInserted) {
+                log.warn("支付记录已存在,可能是重复支付,订单号: {}", orderNo);
+                // 幂等情况:记录已存在,认为是支付成功,但不发送积分消息(由首次支付发送)
+                return Result.success("订单已支付,请勿重复支付");
+            }
+            
             log.info("支付成功, 订单号: {}", orderNo);
+            // 只有支付记录真正插入成功后,才发送积分消息
             sendPointsMessage(order);
             return Result.success("支付成功");
         } catch (Exception e) {

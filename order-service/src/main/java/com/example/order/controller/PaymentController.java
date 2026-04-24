@@ -23,7 +23,11 @@ public class PaymentController {
     @PostMapping("/add")
     public Result<?> insertPayment(@RequestBody PaymentRequest request) {
         log.info("插入支付记录相关的: {}", request);
-        paymentService.insertPayment(request);
-        return Result.success();
+        boolean inserted = paymentService.insertPayment(request);
+        if (inserted) {
+            return Result.success("支付记录插入成功");
+        } else {
+            return Result.success("支付记录已存在(幂等)");
+        }
     }
 }

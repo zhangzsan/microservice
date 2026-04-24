@@ -18,7 +18,6 @@ import java.util.List;
 
 /**
  * 回滚任务补偿定时任务
- * 
  * 职责说明:
  * compensateMissingRollbackTasks - 补偿缺失的回滚任务记录
  *    场景: 订单已超时(TIMEOUT),但order_operation_log表中没有对应记录

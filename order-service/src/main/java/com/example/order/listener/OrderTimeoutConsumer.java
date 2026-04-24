@@ -131,7 +131,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
         try {
             OrderTimeoutMessageLog log = new OrderTimeoutMessageLog();
             log.setOrderNo(message.getOrderNo());
-            // 使用订单号作为messageId（因为一个订单只处理一次超时）
+            // 使用订单号作为messageId(因为一个订单只处理一次超时)
             log.setMessageId(message.getOrderNo());
             log.setProcessed(1);
             

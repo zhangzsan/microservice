@@ -1,5 +1,5 @@
 server:
-  port: 8086
+  port: 8081
 
 spring:
   application:
@@ -10,82 +10,36 @@ spring:
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 50          # 最大连接数
-      minimum-idle: 10               # 最小空闲连接
-      connection-timeout: 30000      # 连接超时30秒
-      idle-timeout: 600000           # 空闲超时10分钟
-      max-lifetime: 1800000          # 最大生命周期30分钟
-      leak-detection-threshold: 60000 # 连接泄漏检测60秒
+      # 最小空闲连接数
+      minimum-idle: 10
+      # 最大连接池大小
+      maximum-pool-size: 50
+      # 连接超时时间(毫秒)
+      connection-timeout: 30000
+      # 空闲连接超时时间(毫秒)，默认600000(10分钟)
+      idle-timeout: 600000
+      # 连接最大生命周期(毫秒)，默认1800000(30分钟)
+      max-lifetime: 1800000
+      # 连接测试查询
+      connection-test-query: SELECT 1
+      # 连接池名称
+      pool-name: OrderServiceHikariCP
   cloud:
     nacos:
       discovery:
         server-addr: localhost:8848
-    sentinel:
-      transport:
-        dashboard: localhost:8090  # Sentinel Dashboard 地址
-        port: 8719
-      datasource:
-        ds1:
-          nacos:
-            server-addr: localhost:8848
-            data-id: ${spring.application.name}-flow-rules
-            group-id: DEFAULT_GROUP
-            rule-type: flow
-            data-type: json
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    database: 0
 
 rocketmq:
-  name-server: 127.0.0.1:9876
-  producer:
-    group: order-producer-group
-    send-message-timeout: 3000
-    retry-times: 3
-    pull-batch-size: 32
-  consumer:
-    # 订单超时消费者配置
-    order-timeout-consumer:
-      topic: order-timeout-topic
-      group: order-timeout-consumer-group
-      consume-thread-min: 10    # 最小消费线程数
-      consume-thread-max: 20    # 最大消费线程数
-      pull-batch-size: 32       # 每次拉取消息数量
-      consume-message-batch-max-size: 1  # 每次消费1条消息(保证顺序)
-      # 说明:
-      # - 增加线程数可以并行处理批量到期的消息
-      # - batch-size=1 保证每个订单独立处理,避免相互影响
-      # - 20个线程可以同时处理20个订单,大幅减少排队时间
-
-redis:
-  host: localhost
-  port: 6379
-  password:
-  database: 0
-
-feign:
-  client:
-    config:
-      default:
-        connectTimeout: 3000    # 连接超时3秒
-        readTimeout: 5000       # 读取超时5秒
-  compression:
-    request:
-      enabled: true             # 启用压缩
-    response:
-      enabled: true
-  circuitbreaker:               # 熔断器
-    enabled: true
-
-resilience4j:
-  circuitbreaker:               #熔断器
-    instances:
-      storageFeignClient:
-        slidingWindowSize: 10
-        failureRateThreshold: 50
-        waitDurationInOpenState: 10000
-        permittedNumberOfCallsInHalfOpenState: 5
-
-logging:
-  level:
-    com.example.order.feign: DEBUG
+    name-server: localhost:9876
+    producer:
+      group: order-producer-group
+      send-message-timeout: 3000
+      retry-times-when-send-failed: 3
+      retry-times-when-send-async-failed: 3
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -93,9 +47,27 @@ mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
-## 高并发下：调增数据库连接池的参数
-#├─ 1000个并发请求
-#├─ 每个请求需要3-5个数据库操作
-#├─ 默认HikariCP连接池大小：10
-#├─ 连接等待超时
-#└─ 大量请求失败 ❌
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 10000
+      storage-service:
+        connectTimeout: 3000
+        readTimeout: 5000
+      account-service:
+        connectTimeout: 3000
+        readTimeout: 5000
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+  httpclient:
+    enabled: true
+    max-connections: 200
+    max-connections-per-route: 50
+
+order:
+  timeout: 300000

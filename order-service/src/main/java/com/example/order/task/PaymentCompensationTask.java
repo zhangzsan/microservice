@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 @Slf4j
@@ -61,7 +62,7 @@ public class PaymentCompensationTask {
     public void compensateStuckPayments() {
         log.info("开始执行支付异常订单补偿任务");
         //查找创建时间在35分钟内的订单
-        LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(35);
+        LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(95);
         
         List<Order> stuckOrders = orderMapper.selectList(new LambdaQueryWrapper<Order>()
                 .eq(Order::getStatus, OrderStatus.PENDING.getValue())
@@ -174,7 +175,6 @@ public class PaymentCompensationTask {
             restoreRequest.setOrderNo(orderNo);
             restoreRequest.setUserId(order.getUserId());
             restoreRequest.setAmount(order.getAmount());
-            
             Result<?> restoreResult = accountFeignClient.restore(restoreRequest);
             
             if (!restoreResult.isSuccess()) {
@@ -252,7 +252,7 @@ public class PaymentCompensationTask {
     private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
         try {
             TransactionMessage message = new TransactionMessage();
-            message.setMessageId(java.util.UUID.randomUUID().toString().replace("-", ""));
+            message.setMessageId(UUID.randomUUID().toString().replace("-", ""));
             message.setTopic(topic);
             message.setTag(tag);
             message.setMessageBody(objectMapper.writeValueAsString(body));

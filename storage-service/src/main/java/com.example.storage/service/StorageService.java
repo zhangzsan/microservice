@@ -12,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+
 @Service
 @Slf4j
 public class StorageService {
@@ -37,7 +39,9 @@ public class StorageService {
         deductLog.setProductId(request.getProductId());
         deductLog.setDeductQuantity(request.getQuantity());
         deductLog.setStatus(0);  // 0-已扣减
-        deductLog.setDeductTime(java.time.LocalDateTime.now());
+        deductLog.setDeductTime(LocalDateTime.now());
+        deductLog.setCreatedTime(LocalDateTime.now());
+        deductLog.setUpdatedTime(deductLog.getCreatedTime());
         
         deductLogMapper.insert(deductLog);
         log.info("库存扣减记录创建成功，订单号: {}, 商品ID: {}", request.getOrderNo(), request.getProductId());
