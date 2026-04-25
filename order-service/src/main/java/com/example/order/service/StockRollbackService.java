@@ -97,6 +97,26 @@ public class StockRollbackService {
     }
 
     /**
+     * 异步执行回滚任务（按订单号）
+     * 用于OrderTimeoutConsumer调用，根据订单号查找任务并执行
+     */
+    @Async
+    @Transactional(rollbackFor = Exception.class)
+    public void executeRollbackAsync(String orderNo) {
+        OrderOperationLog operationLog = operationLogMapper.selectOne(
+                new LambdaQueryWrapper<OrderOperationLog>()
+                        .eq(OrderOperationLog::getOrderNo, orderNo)
+                        .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue())
+        );
+
+        if (operationLog == null) {
+            log.error("回滚任务记录不存在, 订单号: {}", orderNo);
+            return;
+        }
+
+        executeRollback(operationLog.getId());
+    }
+    /**
      * 异步执行回滚任务
      * 使用@Async避免阻塞调用方,提升并发处理能力
      */
