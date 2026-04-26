@@ -39,7 +39,8 @@ public class AccountService {
         frozenLog.setFrozenTime(LocalDateTime.now());
         frozenLog.setCreatedTime(LocalDateTime.now());
         frozenLog.setUpdatedTime(frozenLog.getCreatedTime());
-        frozenLogMapper.insert(frozenLog);
+        int insert = frozenLogMapper.insert(frozenLog);
+        System.out.println(insert);
         log.info("账户冻结记录创建成功，订单号: {}, 用户ID: {}", request.getOrderNo(), request.getUserId());
         log.info("余额扣减成功, 用户ID: {}, 金额: {}", request.getUserId(), request.getAmount());
     }

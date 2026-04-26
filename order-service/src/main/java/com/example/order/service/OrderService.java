@@ -317,6 +317,7 @@ public class OrderService {
             throw new BusinessException("订单状态已变更, 支付失败");
         }
 
+        boolean deductSuccess = false;
         try {
             //模拟扣款操作
             AccountDeductRequest request = new AccountDeductRequest();
@@ -324,7 +325,8 @@ public class OrderService {
             request.setUserId(order.getUserId());
             request.setAmount(order.getAmount());
             Result<?> deduct = accountFeignClient.deduct(request);
-            if (!deduct.isSuccess()) {
+            deductSuccess = deduct.isSuccess();
+            if (!deductSuccess) {
                 log.error("扣除用户余额失败, 订单号: {}, 原因: {}", orderNo, deduct.getMessage());
                 throw new BusinessException("扣款失败: " + deduct.getMessage());
             }
@@ -349,7 +351,9 @@ public class OrderService {
             return Result.success("支付成功");
         } catch (Exception e) {
             log.error("支付过程发生未知异常，回滚账户扣款，订单号: {}", orderNo, e);
-            rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());
+            if(deductSuccess){
+                rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());
+            }
             throw new BusinessException("支付失败: " + e.getMessage());
         }
     }

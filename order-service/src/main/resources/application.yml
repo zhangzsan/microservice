@@ -71,3 +71,22 @@ feign:
 
 order:
   timeout: 300000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus   # 暴露prometheus端点
+  endpoints.prometheus.enabled: true
+  metrics:
+    tags:
+      application: order-service          # 全局标签，所有指标都会带上
+      environment: dev
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true        # 启用HTTP请求的分位数直方图（P99）
+      slo:
+        http.server.requests: 10ms, 50ms, 100ms, 500ms   # 自定义SLO目标
