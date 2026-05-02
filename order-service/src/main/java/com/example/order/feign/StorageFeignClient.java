@@ -8,6 +8,9 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
+/**
+ * 远程调用的库存服务
+ */
 @FeignClient(name = "storage-service",fallback = StorageFeignFallback.class)
 public interface StorageFeignClient {
     @PostMapping("/storage/deduct")

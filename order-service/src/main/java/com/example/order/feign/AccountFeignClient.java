@@ -8,6 +8,9 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
+/**
+ * 远程调用的方法
+ */
 @FeignClient(name = "account-service", fallback = AccountFeignFallback.class)
 public interface AccountFeignClient {
     @PostMapping("/account/deduct")
