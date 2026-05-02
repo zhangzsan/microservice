@@ -5,7 +5,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 本定事务表,事务消息没有发送成功后,记录到本表中进行后续补偿
+ * 本地事务表,事务消息没有发送成功后,记录到本表中进行后续补偿
  */
 @Data
 @TableName("t_transaction_message")

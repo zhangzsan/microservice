@@ -104,10 +104,7 @@ public class StockRollbackService {
     @Transactional(rollbackFor = Exception.class)
     public void executeRollbackAsync(String orderNo) {
         OrderOperationLog operationLog = operationLogMapper.selectOne(
-                new LambdaQueryWrapper<OrderOperationLog>()
-                        .eq(OrderOperationLog::getOrderNo, orderNo)
-                        .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue())
-        );
+                new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, orderNo).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
 
         if (operationLog == null) {
             log.error("回滚任务记录不存在, 订单号: {}", orderNo);
@@ -209,13 +206,11 @@ public class StockRollbackService {
 
     private void updateLogStatus(Long logId, OperationStatus status, String errorMessage) {
         LambdaUpdateWrapper<OrderOperationLog> updateWrapper = 
-            new LambdaUpdateWrapper<OrderOperationLog>()
-                .eq(OrderOperationLog::getId, logId).set(OrderOperationLog::getOperationStatus, status.getValue());
+            new LambdaUpdateWrapper<OrderOperationLog>().eq(OrderOperationLog::getId, logId).set(OrderOperationLog::getOperationStatus, status.getValue());
 
         if (errorMessage != null) {
             updateWrapper.set(OrderOperationLog::getErrorMessage, errorMessage);
         }
-
         operationLogMapper.update(null, updateWrapper);
     }
 }

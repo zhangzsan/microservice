@@ -98,7 +98,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     private boolean processOrderTimeoutInTransaction(OrderTimeoutMessage message) {
         String orderNo = message.getOrderNo();
 
-        // 1. 幂等性检查：记录消息消费状态（利用唯一索引防重）
+        // 1. 幂等性检查：记录消息消费状态(利用唯一索引防重)
         if (!recordMessageIfNew(message)) {
             log.warn("消息已处理，跳过重复消费. 订单号: {}", orderNo);
             return false;
@@ -135,7 +135,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     }
 
     /**
-     * 创建回滚任务记录（在事务中执行）
+     * 创建回滚任务记录(在事务中执行)
      * 确保订单状态变更和回滚任务记录的原子性
      */
     private void createRollbackTaskRecord(OrderTimeoutMessage message) {
@@ -168,7 +168,6 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
             log.warn("回滚任务记录已存在(唯一索引冲突), 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
             log.error("创建回滚任务记录失败, 订单号: {}", message.getOrderNo(), e);
-            // 不抛出异常，让补偿机制处理
         }
     }
 
@@ -181,13 +180,10 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
         try {
             OrderTimeoutMessageLog log = new OrderTimeoutMessageLog();
             log.setOrderNo(message.getOrderNo());
-            // 使用订单号作为messageId(因为一个订单只处理一次超时)
             log.setMessageId(message.getOrderNo());
             log.setProcessed(1);
-
             messageLogMapper.insert(log);
             return true;
-
         } catch (DuplicateKeyException e) {
             log.warn("消息已存在（唯一索引冲突），订单号: {}", message.getOrderNo());
             return false;

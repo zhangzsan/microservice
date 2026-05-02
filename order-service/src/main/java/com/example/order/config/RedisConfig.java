@@ -19,7 +19,6 @@ public class RedisConfig {
     public RedissonClient redissonClient() {
         Config config = new Config();
         config.useSingleServer().setAddress("redis://" + REDIS_HOST + ":" + REDIS_PORT);
-        //设置看门狗的等待时间
         config.setLockWatchdogTimeout(60000);
         return Redisson.create(config);
     }

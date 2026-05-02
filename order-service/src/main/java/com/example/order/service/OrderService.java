@@ -72,27 +72,25 @@ public class OrderService {
     @SentinelResource(value = "create-order", blockHandler = "handleCreateOrderBlock")
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
-        log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
-        
+
         String orderNo = request.getOrderNo();
-        if(StringUtils.isEmpty(orderNo)){
+        if (StringUtils.isEmpty(orderNo)) {
             throw new BusinessException("请求参数不合法");
         }
-
-        /*
-         * 控制10分钟内不能重复提交
-         */
+        log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
         String processingKey = RedisConstant.ORDER_PROCESSING + orderNo;
         Boolean isFirstSubmit = stringRedisTemplate.opsForValue().setIfAbsent(processingKey, "processing", 10, TimeUnit.MINUTES);
-        
+
         if (Boolean.FALSE.equals(isFirstSubmit)) {
             log.warn("订单号正在处理中或已处理,拒绝重复提交, 订单号: {}", orderNo);
             throw new BusinessException("订单正在处理中,请勿重复提交");
         }
-        
+
         try {
+            // 成功时保留Redis Key,利用其过期时间(10分钟)防止短时间内重复提交同一订单
             return doCreateOrder(request, orderNo);
         } catch (Exception e) {
+            // 失败时立即删除 Redis Key, 允许用户重试
             stringRedisTemplate.delete(processingKey);
             log.error("订单创建失败,已清除处理标记, 订单号: {}", orderNo, e);
             throw new BusinessException(e.getMessage());
@@ -105,9 +103,12 @@ public class OrderService {
     private OrderDTO doCreateOrder(OrderCreateRequest request, String orderNo) {
         boolean cacheDeductSuccess = storageCacheService.deductStockWithRedis(request.getProductId(), request.getQuantity());
         if (!cacheDeductSuccess) {
-            throw new BusinessException("库存不足,请选择其他商品下单");
+            throw new BusinessException("库存不足,请选择其他商品下单.");
         }
 
+        /*
+         * 扣减数据库库存
+         */
         StorageDeductRequest storageRequest = new StorageDeductRequest();
         storageRequest.setProductId(request.getProductId());
         storageRequest.setQuantity(request.getQuantity());
@@ -128,10 +129,8 @@ public class OrderService {
             order.setStatus(OrderStatus.PENDING.getValue());
             order.setCreatedTime(LocalDateTime.now());
             order.setUpdatedTime(order.getCreatedTime());
-            
             // 如果订单号已存在,会抛出DuplicateKeyException
             orderMapper.insert(order);
-            
             // 订单创建成功后,再发送超时消息
             sendOrderTimeoutMessage(order);
             log.info("订单创建成功, 订单号: {}", orderNo);
@@ -177,13 +176,14 @@ public class OrderService {
         message.setAmount(order.getAmount());
         try {
             rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(message).build(), 3000, 16);
-            log.info("订单超时延迟消息已发送，订单号: {}", order.getOrderNo());
+            log.info("订单超时延迟消息已发送, 订单号: {}", order.getOrderNo());
         } catch (Exception e) {
-            log.error("发送订单超时消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
+            log.error("发送订单超时消息失败, 降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
             // 降级保存,不影响订单创建
             saveFailedMessageToDb(order.getOrderNo(), "order-timeout-topic", "timeout", message);
         }
     }
+
     private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
         try {
             TransactionMessage message = new TransactionMessage();
@@ -270,7 +270,7 @@ public class OrderService {
         } finally {
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
-                log.info("释放锁成功，订单号: {}", orderNo);
+                log.info("释放锁成功, 订单号: {}", orderNo);
             }
         }
     }
@@ -336,7 +336,7 @@ public class OrderService {
             paymentRequest.setTransactionId("TXN" + System.currentTimeMillis() + orderNo);
             paymentRequest.setPayAmount(order.getAmount());
             paymentRequest.setPayChannel(1);
-            
+
             // 检查支付记录是否真正插入成功
             boolean paymentInserted = paymentService.insertPayment(paymentRequest);
             if (!paymentInserted) {
@@ -344,14 +344,14 @@ public class OrderService {
                 // 幂等情况:记录已存在,认为是支付成功,但不发送积分消息(由首次支付发送)
                 return Result.success("订单已支付,请勿重复支付");
             }
-            
+
             log.info("支付成功, 订单号: {}", orderNo);
             // 只有支付记录真正插入成功后,才发送积分消息
             sendPointsMessage(order);
             return Result.success("支付成功");
         } catch (Exception e) {
             log.error("支付过程发生未知异常，回滚账户扣款，订单号: {}", orderNo, e);
-            if(deductSuccess){
+            if (deductSuccess) {
                 rollbackAccountDeduct(orderNo, order.getUserId(), order.getAmount());
             }
             throw new BusinessException("支付失败: " + e.getMessage());
@@ -359,9 +359,8 @@ public class OrderService {
     }
 
 
-
     /**
-     *  库存回滚失败操作
+     * 库存回滚失败操作
      */
     private void rollbackStorageDeduct(String orderNo, Long productId, Integer quantity) {
         try {
@@ -385,15 +384,14 @@ public class OrderService {
             log.error("库存回滚失败,需要人工介入, 订单号: {}", orderNo, e);
         }
     }
+
     /**
      * 订单支付失败, 回滚订单状态
      */
     private void rollbackOrderStatus(String orderNo) {
         try {
             UpdateWrapper<Order> rollbackUpdate = new UpdateWrapper<>();
-            rollbackUpdate.lambda().eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PAID.getValue())
-                .set(Order::getStatus, OrderStatus.PENDING.getValue());
-            
+            rollbackUpdate.lambda().eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PAID.getValue()).set(Order::getStatus, OrderStatus.PENDING.getValue());
             int rolledBack = orderMapper.update(null, rollbackUpdate);
             if (rolledBack > 0) {
                 log.info("订单状态回滚成功，订单号: {}", orderNo);
@@ -406,7 +404,7 @@ public class OrderService {
     }
 
     /**
-     *  恢复账户金额
+     * 恢复账户金额
      */
     private void rollbackAccountDeduct(String orderNo, Long userId, BigDecimal amount) {
         try {
@@ -414,7 +412,7 @@ public class OrderService {
             restoreRequest.setOrderNo(orderNo);
             restoreRequest.setUserId(userId);
             restoreRequest.setAmount(amount);
-            
+
             Result<?> restoreResult = accountFeignClient.restore(restoreRequest);
             if (restoreResult.isSuccess()) {
                 log.info("账户扣款回滚成功, 订单号: {}", orderNo);
