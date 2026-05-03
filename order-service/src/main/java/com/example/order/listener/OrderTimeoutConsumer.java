@@ -107,8 +107,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
         }
 
         // 2. CAS更新订单状态
-        LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
-                .eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
+        LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>().eq(Order::getOrderNo, orderNo).eq(Order::getStatus, OrderStatus.PENDING.getValue()).set(Order::getStatus, OrderStatus.TIMEOUT.getValue());
 
         int updated = orderMapper.update(null, updateWrapper);
         if (updated > 0) {
@@ -143,10 +142,8 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
     private void createRollbackTaskRecord(OrderTimeoutMessage message) {
         try {
             // 检查是否已存在回滚任务
-            OrderOperationLog existLog = operationLogMapper.selectOne(
-                    new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, message.getOrderNo())
-                            .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue())
-            );
+            OrderOperationLog existLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, message.getOrderNo())
+                            .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
 
             if (existLog != null) {
                 log.warn("回滚任务记录已存在, 订单号: {}", message.getOrderNo());
@@ -161,11 +158,9 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
             operationLog.setRetryCount(0);
             operationLog.setMaxRetryCount(3);
             operationLog.setRequestData(objectMapper.writeValueAsString(message));
-            operationLog.setNextRetryTime(java.time.LocalDateTime.now());
-
+            operationLog.setNextRetryTime(LocalDateTime.now());
             operationLogMapper.insert(operationLog);
             log.info("回滚任务记录创建成功, 订单号: {}", message.getOrderNo());
-
         } catch (DuplicateKeyException e) {
             log.warn("回滚任务记录已存在(唯一索引冲突), 订单号: {}", message.getOrderNo());
         } catch (Exception e) {

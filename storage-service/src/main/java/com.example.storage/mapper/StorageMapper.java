@@ -16,13 +16,12 @@ public interface StorageMapper extends BaseMapper<Storage> {
     int update(@Param("productId") Long productId, @Param("quantity") Integer quantity);
 
     /**
-     * 恢复库存（带幂等性保护）
-     * 防止重复恢复：只有当used > 0时才允许恢复
+     * 恢复库存(带幂等性保护)
+     * 防止重复恢复： 只有当used > 0时才允许恢复
      * 防止超额恢复：确保residue不超过total
      */
     @Update("update t_storage set used = used - #{quantity}, residue = residue + #{quantity} " +
-            "where product_id = #{productId} " +
-            "AND used >= #{quantity} " +  // 确保已扣减的数量足够回滚
-            "AND (residue + #{quantity}) <= (SELECT total FROM t_storage WHERE product_id = #{productId})")  // 防止超过总量
+            "where product_id = #{productId} AND used >= #{quantity} " +  // 确保已扣减的数量足够回滚
+            "AND (residue + #{quantity}) <= (SELECT total FROM (select total from t_storage WHERE product_id = #{productId}) as tmp)")  // 防止超过总量
     int restore(@Param("productId") Long productId, @Param("quantity") Integer quantity);
 }

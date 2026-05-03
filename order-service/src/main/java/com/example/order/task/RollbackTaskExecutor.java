@@ -54,16 +54,9 @@ public class RollbackTaskExecutor {
     @Scheduled(fixedDelay = 300000)
     public void compensateMissingRollbackTasks() {
         log.debug("开始扫描缺失的回滚任务");
-
         // 查询15分钟前超时的订单(给正常流程留足够时间)
         LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(15);
-
-        List<Order> timeoutOrders = orderMapper.selectList(
-                new LambdaQueryWrapper<Order>()
-                        .eq(Order::getStatus, OrderStatus.TIMEOUT.getValue())
-                        .lt(Order::getUpdatedTime, timeoutThreshold)
-                        .last("LIMIT 50")  // 每次最多处理50个订单
-        );
+        List<Order> timeoutOrders = orderMapper.selectList(new LambdaQueryWrapper<Order>().eq(Order::getStatus, OrderStatus.TIMEOUT.getValue()).lt(Order::getUpdatedTime, timeoutThreshold).last("LIMIT 50"));
 
         if (timeoutOrders.isEmpty()) {
             log.debug("无需补偿的超时订单");
@@ -71,40 +64,28 @@ public class RollbackTaskExecutor {
         }
 
         log.info("发现 {} 个可能需要补偿的超时订单", timeoutOrders.size());
-
-        int createdCount = 0;
-        int skippedCount = 0;
+        int createdCount = 0,  skippedCount = 0;
 
         for (Order order : timeoutOrders) {
             try {
-                // 检查是否已存在回滚任务
-                OrderOperationLog orderOperationLog = operationLogMapper.selectOne(
-                        new LambdaQueryWrapper<OrderOperationLog>()
-                                .eq(OrderOperationLog::getOrderNo, order.getOrderNo())
-                                .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue())
-                );
-
+                OrderOperationLog orderOperationLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, order.getOrderNo())
+                        .eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
                 if (orderOperationLog != null) {
                     skippedCount++;
                     continue;
                 }
-
                 // 不存在回滚任务,补偿创建
                 log.warn("检测到缺失的回滚任务,补偿创建 - 订单号: {}", order.getOrderNo());
-
                 OrderTimeoutMessage message = new OrderTimeoutMessage();
                 message.setOrderNo(order.getOrderNo());
                 message.setProductId(order.getProductId());
                 message.setQuantity(order.getQuantity());
                 message.setUserId(order.getUserId());
                 message.setAmount(order.getAmount());
-
                 // 同步创建回滚任务(确保成功)
                 stockRollbackService.createRollbackTaskSync(message);
                 createdCount++;
-
                 log.info("补偿创建回滚任务成功 - 订单号: {}", order.getOrderNo());
-
             } catch (Exception e) {
                 log.error("补偿创建回滚任务失败 - 订单号: {}", order.getOrderNo(), e);
             }

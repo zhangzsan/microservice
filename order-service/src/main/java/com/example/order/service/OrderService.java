@@ -12,16 +12,19 @@ import com.example.order.constant.MessageStatus;
 import com.example.order.constant.RedisConstant;
 import com.example.order.dto.OrderDTO;
 import com.example.order.entity.Order;
+import com.example.order.entity.OrderOperationLog;
 import com.example.order.entity.TransactionMessage;
 import com.example.order.feign.AccountFeignClient;
 import com.example.order.feign.StorageFeignClient;
 import com.example.order.mapper.OrderMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.yulichang.wrapper.MPJLambdaWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.aop.target.LazyInitTargetSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -176,7 +180,7 @@ public class OrderService {
         message.setUserId(order.getUserId());
         message.setAmount(order.getAmount());
         try {
-            rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(message).build(), 3000, 16);
+            rocketMQTemplate.syncSend("order-timeout-topic", MessageBuilder.withPayload(message).build(), 3000, 3);
             log.info("订单超时延迟消息已发送, 订单号: {}", order.getOrderNo());
         } catch (Exception e) {
             log.error("发送订单超时消息失败, 降级保存到数据库, 订单号: {}", order.getOrderNo(), e);

@@ -28,15 +28,14 @@ public class StockCompensationTask {
     /**
      * 执行回滚补偿任务
      * 说明:
-     * - 扫描 PROCESSING/FAILED 状态且到达重试时间的任务
+     * - 扫描 PROCESSING/FAILED状态且到达重试时间的任务
      * - 批量调用 executeBatchRollback 执行回滚
      * - 30秒频率保证回滚及时性,同时避免频繁扫描
      */
     @Scheduled(fixedDelay = 30000)
     public void compensateFailedRollbacks() {
         log.info("开始执行回滚补偿任务");
-        List<OrderOperationLog> failedLogs = operationLogMapper.selectList(
-            new LambdaQueryWrapper<OrderOperationLog>()
+        List<OrderOperationLog> failedLogs = operationLogMapper.selectList(new LambdaQueryWrapper<OrderOperationLog>()
                 .in(OrderOperationLog::getOperationStatus, OperationStatus.PROCESSING.getValue(), OperationStatus.FAILED.getValue())
                 .le(OrderOperationLog::getNextRetryTime, LocalDateTime.now())
                 .orderByAsc(OrderOperationLog::getNextRetryTime)
@@ -46,17 +45,13 @@ public class StockCompensationTask {
             log.debug("无需补偿的任务");
             return;
         }
-
         log.info("发现 {} 个需要补偿的任务", failedLogs.size());
-        
         List<Long> logIds = failedLogs.stream().map(OrderOperationLog::getId).collect(Collectors.toList());
-        
         try {
             rollbackService.executeBatchRollback(logIds);
+            log.info("回滚补偿任务执行完成");
         } catch (Exception e) {
             log.error("批量补偿任务执行异常", e);
         }
-        
-        log.info("回滚补偿任务执行完成");
     }
 }

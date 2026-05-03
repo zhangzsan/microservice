@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.common.dto.StorageDeductRequest;
 import com.example.common.dto.StorageRestoreRequest;
 import com.example.common.exception.BusinessException;
+import com.example.storage.entity.Storage;
 import com.example.storage.entity.StorageDeductLog;
 import com.example.storage.mapper.StorageDeductLogMapper;
 import com.example.storage.mapper.StorageMapper;
@@ -27,8 +28,7 @@ public class StorageService {
     @Transactional(rollbackFor = Exception.class)
     public void deduct(StorageDeductRequest request) {
         // 1. 查询该订单的库存扣减记录(精确控制订单级别的库存回滚)
-        StorageDeductLog storageDeductLog = deductLogMapper.selectOne(
-                new LambdaQueryWrapper<StorageDeductLog>().eq(StorageDeductLog::getOrderNo, request.getOrderNo()).eq(StorageDeductLog::getProductId, request.getProductId()));
+        StorageDeductLog storageDeductLog = deductLogMapper.selectOne(new LambdaQueryWrapper<StorageDeductLog>().eq(StorageDeductLog::getOrderNo, request.getOrderNo()).eq(StorageDeductLog::getProductId, request.getProductId()));
         if (storageDeductLog != null) {
             log.error("已扣减库存扣减记录，订单号: {}, 商品ID: {}", request.getOrderNo(), request.getProductId());
             return;
@@ -62,8 +62,7 @@ public class StorageService {
         Long productId = request.getProductId();
 
         // 1. 查询该订单的库存扣减记录（精确控制订单级别的库存回滚）
-        StorageDeductLog deductLog = deductLogMapper.selectOne(
-                new LambdaQueryWrapper<StorageDeductLog>().eq(StorageDeductLog::getOrderNo, orderNo).eq(StorageDeductLog::getProductId, productId));
+        StorageDeductLog deductLog = deductLogMapper.selectOne(new LambdaQueryWrapper<StorageDeductLog>().eq(StorageDeductLog::getOrderNo, orderNo).eq(StorageDeductLog::getProductId, productId));
 
         if (deductLog == null) {
             log.error("未找到订单的库存扣减记录，订单号: {}, 商品ID: {}", orderNo, productId);
@@ -91,7 +90,6 @@ public class StorageService {
 
         // 3. 恢复库存（使用订单实际扣减的数量）
         int updateCount = storageMapper.restore(productId, deductLog.getDeductQuantity());
-
         if (updateCount == 0) {
             log.error("库存恢复失败, 商品ID: {}, 订单号: {}", productId, orderNo);
             throw new BusinessException("库存恢复失败");

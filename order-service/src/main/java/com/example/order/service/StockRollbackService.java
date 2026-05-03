@@ -65,9 +65,7 @@ public class StockRollbackService {
      */
     private void createRollbackTaskInternal(OrderTimeoutMessage message) {
         try {
-            OrderOperationLog existLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>()
-                    .eq(OrderOperationLog::getOrderNo, message.getOrderNo()).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
-
+            OrderOperationLog existLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, message.getOrderNo()).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
             if (existLog != null) {
                 if (existLog.getOperationStatus() == OperationStatus.SUCCESS.getValue()) {
                     log.warn("回滚任务已成功, 无需重复创建, 订单号: {}", message.getOrderNo());
@@ -87,7 +85,6 @@ public class StockRollbackService {
             blog.setNextRetryTime(LocalDateTime.now());
             operationLogMapper.insert(blog);
             log.info("创建回滚任务成功，订单号: {}", message.getOrderNo());
-            
         } catch (DuplicateKeyException e) {
             log.warn("回滚任务已存在(唯一索引冲突), 订单号: {}", message.getOrderNo());
         } catch (Exception e) {
@@ -103,8 +100,7 @@ public class StockRollbackService {
     @Async
     @Transactional(rollbackFor = Exception.class)
     public void executeRollbackAsync(String orderNo) {
-        OrderOperationLog operationLog = operationLogMapper.selectOne(
-                new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, orderNo).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
+        OrderOperationLog operationLog = operationLogMapper.selectOne(new LambdaQueryWrapper<OrderOperationLog>().eq(OrderOperationLog::getOrderNo, orderNo).eq(OrderOperationLog::getOperationType, OperationType.TIMEOUT_CANCEL.getValue()));
 
         if (operationLog == null) {
             log.error("回滚任务记录不存在, 订单号: {}", orderNo);
@@ -181,11 +177,11 @@ public class StockRollbackService {
     }
 
     private void rollbackStorage(OrderTimeoutMessage message) {
-        StorageRestoreRequest request = new StorageRestoreRequest();
-        request.setProductId(message.getProductId());
-        request.setQuantity(message.getQuantity());
-        request.setOrderNo(message.getOrderNo());
         try {
+            StorageRestoreRequest request = new StorageRestoreRequest();
+            request.setProductId(message.getProductId());
+            request.setQuantity(message.getQuantity());
+            request.setOrderNo(message.getOrderNo());
             storageFeignClient.restore(request);
             log.info("库存回滚成功，订单号: {}", message.getOrderNo());
         } catch (Exception e) {

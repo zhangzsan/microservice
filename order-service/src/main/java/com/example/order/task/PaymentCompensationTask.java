@@ -52,7 +52,6 @@ public class PaymentCompensationTask {
 
     /**
      * 补偿卡单订单
-     * 
      * 说明:
      * - 扫描创建时间超过35分钟仍为PENDING状态的订单
      * - 检查是否有支付记录,进行相应补偿
@@ -62,7 +61,7 @@ public class PaymentCompensationTask {
     public void compensateStuckPayments() {
         log.info("开始执行支付异常订单补偿任务");
         //查找创建时间在35分钟内的订单
-        LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(95);
+        LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(35);
         
         List<Order> stuckOrders = orderMapper.selectList(new LambdaQueryWrapper<Order>()
                 .eq(Order::getStatus, OrderStatus.PENDING.getValue())
@@ -107,9 +106,7 @@ public class PaymentCompensationTask {
     private CompensationResult handleStuckOrder(Order order) {
         String orderNo = order.getOrderNo();
         log.info("处理卡单订单, 订单号: {}, 用户ID: {}, 创建时间: {}", orderNo, order.getUserId(), order.getCreatedTime());
-
         PaymentRecord paymentRecord = paymentRecordMapper.selectOne(new LambdaQueryWrapper<PaymentRecord>().eq(PaymentRecord::getOrderNo, orderNo));
-
         if (paymentRecord != null) {
             log.warn("订单存在支付记录但未更新状态, 尝试补偿，订单号: {}", orderNo);
             return compensatePaidOrder(order, paymentRecord);
@@ -119,10 +116,12 @@ public class PaymentCompensationTask {
         }
     }
 
+    /**
+     * 处理已经支付但是订单的状态还未更新
+     */
     @Transactional(rollbackFor = Exception.class)
     private CompensationResult compensatePaidOrder(Order order, PaymentRecord paymentRecord) {
         String orderNo = order.getOrderNo();
-        
         try {
             // CAS更新订单状态: PENDING -> PAID
             LambdaUpdateWrapper<Order> updateWrapper = new LambdaUpdateWrapper<Order>()
@@ -136,7 +135,6 @@ public class PaymentCompensationTask {
                 sendPointsMessage(order);
                 return CompensationResult.COMPENSATED;
             } else {
-                // 更新失败,查询当前状态判断原因
                 Order currentOrder = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
                 if (currentOrder == null) {
                     log.error("订单不存在，需要人工介入, 订单号: {}", orderNo);
@@ -176,7 +174,6 @@ public class PaymentCompensationTask {
             restoreRequest.setUserId(order.getUserId());
             restoreRequest.setAmount(order.getAmount());
             Result<?> restoreResult = accountFeignClient.restore(restoreRequest);
-            
             if (!restoreResult.isSuccess()) {
                 log.error("账户扣款回滚失败, 需要人工介入, 订单号: {}, 原因: {}", orderNo, restoreResult.getMessage());
                 return CompensationResult.MANUAL_INTERVENTION;
@@ -187,13 +184,11 @@ public class PaymentCompensationTask {
             // 更新支付记录状态为已退款(本地事务)
             LambdaUpdateWrapper<PaymentRecord> updateWrapper = new LambdaUpdateWrapper<PaymentRecord>()
                 .eq(PaymentRecord::getId, paymentRecord.getId())
-                .set(PaymentRecord::getPayStatus, 2); // TODO: 使用常量替代魔法数字
+                .set(PaymentRecord::getPayStatus, 2);
             
             paymentRecordMapper.update(null, updateWrapper);
             log.info("支付记录状态已标记为已退款，订单号: {}", orderNo);
-            
             return CompensationResult.COMPENSATED;
-            
         } catch (Exception e) {
             log.error("回滚支付异常，需要人工介入，订单号: {}", orderNo, e);
             return CompensationResult.MANUAL_INTERVENTION;
@@ -223,18 +218,11 @@ public class PaymentCompensationTask {
     private void sendPointsMessage(Order order) {
         try {
             PointsMessage pointsMessage = buildPointsMessage(order);
-
-            rocketMQTemplate.sendMessageInTransaction(
-                "points-tx-topic", 
-                MessageBuilder.withPayload(pointsMessage)
-                    .setHeader("order_no", order.getOrderNo()).build(), order.getOrderNo()
-            );
-            
+            rocketMQTemplate.syncSend("points-topic", MessageBuilder.withPayload(pointsMessage).build());
             log.info("补偿发送积分事务消息成功, 订单号: {}", order.getOrderNo());
         } catch (Exception e) {
             log.error("发送积分事务消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
-            saveFailedMessageToDb(order.getOrderNo(), "points-tx-topic", "points", 
-                buildPointsMessage(order));
+            saveFailedMessageToDb(order.getOrderNo(), buildPointsMessage(order));
         }
     }
 
@@ -249,12 +237,12 @@ public class PaymentCompensationTask {
         return message;
     }
 
-    private void saveFailedMessageToDb(String orderNo, String topic, String tag, Object body) {
+    private void saveFailedMessageToDb(String orderNo, Object body) {
         try {
             TransactionMessage message = new TransactionMessage();
             message.setMessageId(UUID.randomUUID().toString().replace("-", ""));
-            message.setTopic(topic);
-            message.setTag(tag);
+            message.setTopic("points-topic");
+            message.setTag("points");
             message.setMessageBody(objectMapper.writeValueAsString(body));
             message.setStatus(MessageStatus.PENDING.getValue());
             message.setRetryCount(0);
@@ -262,7 +250,7 @@ public class PaymentCompensationTask {
             message.setNextRetryTime(LocalDateTime.now());
             message.setErrorMessage("MQ发送失败,降级保存");
             transactionMessageService.saveMessage(message);
-            log.warn("消息已保存到数据库待补偿，订单号: {}, topic: {}", orderNo, topic);
+            log.warn("消息已保存到数据库待补偿，订单号: {}, topic: {}", orderNo, "points-tx-topic");
         } catch (Exception ex) {
             log.error("保存失败消息到数据库也失败, 需人工介入，订单号: {}", orderNo, ex);
         }
