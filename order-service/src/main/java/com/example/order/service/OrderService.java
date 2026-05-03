@@ -73,10 +73,10 @@ public class OrderService {
     @Transactional(rollbackFor = Exception.class)
     public OrderDTO createOrder(OrderCreateRequest request) {
 
-        String orderNo = request.getOrderNo();
-        if (StringUtils.isEmpty(orderNo)) {
-            throw new BusinessException("请求参数不合法");
-        }
+        String orderNo = generateOrderNo();
+//        if (StringUtils.isEmpty(orderNo)) {
+//            throw new BusinessException("请求参数不合法");
+//        }
         log.info("开始创建订单, 用户ID: {}, 商品ID: {}, 数量: {}", request.getUserId(), request.getProductId(), request.getQuantity());
         String processingKey = RedisConstant.ORDER_PROCESSING + orderNo;
         Boolean isFirstSubmit = stringRedisTemplate.opsForValue().setIfAbsent(processingKey, "processing", 10, TimeUnit.MINUTES);
@@ -154,16 +154,17 @@ public class OrderService {
     }
 
     private void sendPointsMessage(Order order) {
+        PointsMessage pointsMessage = new PointsMessage();
         try {
-            PointsMessage pointsMessage = new PointsMessage();
             pointsMessage.setUserId(order.getUserId());
             pointsMessage.setOrderNo(order.getOrderNo());
             pointsMessage.setPoints(order.getAmount().intValue());
-            rocketMQTemplate.sendMessageInTransaction("points-tx-topic", MessageBuilder.withPayload(pointsMessage).setHeader("order_no", order.getOrderNo()).build(), order.getOrderNo());
+            log.info("发送前的消息:{}" , pointsMessage);
+            rocketMQTemplate.syncSend("points-topic", MessageBuilder.withPayload(pointsMessage).build(),3000);
             log.info("积分事务消息已发送，订单号: {}", order.getOrderNo());
         } catch (Exception e) {
             log.error("发送积分事务消息失败，降级保存到数据库, 订单号: {}", order.getOrderNo(), e);
-            saveFailedMessageToDb(order.getOrderNo(), "points-tx-topic", "points", new PointsMessage(order.getUserId(), order.getOrderNo(), order.getAmount().intValue()));
+            saveFailedMessageToDb(order.getOrderNo(), "points-topic", "points", pointsMessage);
         }
     }
 

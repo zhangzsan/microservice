@@ -28,6 +28,8 @@ import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+
 /*
  * 1️⃣ 数据库层面; 唯一索引 + CAS乐观锁
  * 2️⃣ 应用层面: 分布式锁 + 状态机校验
@@ -182,6 +184,8 @@ public class OrderTimeoutConsumer implements RocketMQListener<OrderTimeoutMessag
             log.setOrderNo(message.getOrderNo());
             log.setMessageId(message.getOrderNo());
             log.setProcessed(1);
+            log.setCreatedTime(LocalDateTime.now());
+            log.setUpdatedTime(log.getCreatedTime());
             messageLogMapper.insert(log);
             return true;
         } catch (DuplicateKeyException e) {

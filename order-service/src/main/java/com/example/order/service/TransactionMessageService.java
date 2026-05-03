@@ -158,12 +158,10 @@ public class TransactionMessageService {
     private void sendMessage(TransactionMessage message) {
         String destination = message.getTopic() + ":" + message.getTag();
         
-        if ("points-tx-topic".equals(message.getTopic())) {
+        if ("points-topic".equals(message.getTopic())) {
             try {
                 Object body = objectMapper.readValue(message.getMessageBody(), Object.class);
-                
-                rocketMQTemplate.sendMessageInTransaction(message.getTopic(), MessageBuilder.withPayload(body).build(), extractOrderNo(message.getMessageBody()));
-                
+                rocketMQTemplate.syncSend(message.getTopic(), MessageBuilder.withPayload(body).build(), 3000);
                 updateMessageStatus(message.getId());
                 log.info("事务消息发送成功, messageId: {}, topic: {}", message.getMessageId(), message.getTopic());
             } catch (Exception e) {
